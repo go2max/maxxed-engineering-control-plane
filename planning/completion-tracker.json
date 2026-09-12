@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": "2026-09-12T22:34:00Z",
+  "updated_at": "2026-09-12T22:38:00Z",
   "retirement_policy": { "completion_required_pct": 100, "validation_passes_required": 2, "clear_only_when_both_true": true },
   "categories": [
     {"id":"compute-fabric","name":"Local Compute Fabric","completion_pct":100,"validation_passes":1,"clear_eligible":false,"status":"complete-awaiting-second-pass","evidence":["Maxxed-Technical-Systems/maxxed-local-compute-fabric PRs #2-#28 merged","direct Node 22 validation 7/7 tests passed","worker failover, fencing, reassignment, restart persistence and operator controls implemented"]},
@@ -9,6 +9,6 @@
     {"id":"verifier-repair","name":"Verifier and Repair Fabric","completion_pct":30,"validation_passes":0,"clear_eligible":false,"status":"implementation","evidence":["acceptance and failure-recovery contracts defined","independent acceptance verifier, explicit failure taxonomy, bounded repair attempts, repeated-failure circuit breaker and escalation path implemented"]},
     {"id":"local-model-router","name":"Local AI / Model Router","completion_pct":28,"validation_passes":0,"clear_eligible":false,"status":"implementation","evidence":["local-first architecture direction established","executable model registry, health-aware capability/context/cost routing, local-first selection with external escalation disabled by default, and OpenAI-compatible local inference client boundary implemented"]},
     {"id":"admin-integration","name":"Maxxed Admin Operator Integration","completion_pct":14,"validation_passes":0,"clear_eligible":false,"status":"implementation","evidence":["integration contract plus Maxxed-Tech-Site issues #883-#886 created; runtime projection/actions pending"]},
-    {"id":"saas-web-factory","name":"SaaS / Web Product Factory","completion_pct":9,"validation_passes":0,"clear_eligible":false,"status":"implementation","evidence":["product-factory architecture defined; executable factory pipeline pending"]}
+    {"id":"saas-web-factory","name":"SaaS / Web Product Factory","completion_pct":24,"validation_passes":0,"clear_eligible":false,"status":"implementation","evidence":["product-factory architecture defined","executable SaaS/web factory stage machine and dependency-linked task templates implemented for spec, implementation, unit/API, browser, accessibility, security, staging, visual verification and acceptance"]}
   ]
 }
