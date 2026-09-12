@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": "2026-09-12T22:24:00Z",
+  "updated_at": "2026-09-12T22:29:00Z",
   "retirement_policy": {
     "completion_required_pct": 100,
     "validation_passes_required": 2,
@@ -59,11 +59,14 @@
     {
       "id": "local-model-router",
       "name": "Local AI / Model Router",
-      "completion_pct": 6,
+      "completion_pct": 28,
       "validation_passes": 0,
       "clear_eligible": false,
       "status": "implementation",
-      "evidence": ["local-first architecture direction established; executable local model runtime/router pending"]
+      "evidence": [
+        "local-first architecture direction established",
+        "executable model registry, health-aware capability/context/cost routing, local-first selection with external escalation disabled by default, and OpenAI-compatible local inference client boundary implemented"
+      ]
     },
     {
       "id": "admin-integration",
