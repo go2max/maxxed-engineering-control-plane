@@ -24,39 +24,30 @@ export class ClaimAuthority {
     return structuredClone(claim);
   }
 
-  validate(token, now = Date.now()) {
-    const claim = this.#claims.get(token.taskKey);
-    return Boolean(claim && claim.expiresAt > now && this.#matches(claim, token));
-  }
-
-  release(token) {
-    const claim = this.#claims.get(token.taskKey);
-    if (!this.#matches(claim, token)) return false;
-    this.#claims.delete(token.taskKey);
-    return true;
-  }
-
-  fence(taskKey) {
-    const generation = (this.#generation.get(taskKey) ?? 0) + 1;
-    this.#generation.set(taskKey, generation);
-    this.#claims.delete(taskKey);
-    return generation;
-  }
+  validate(token, now = Date.now()) { const claim = this.#claims.get(token.taskKey); return Boolean(claim && claim.expiresAt > now && this.#matches(claim, token)); }
+  release(token) { const claim = this.#claims.get(token.taskKey); if (!this.#matches(claim, token)) return false; this.#claims.delete(token.taskKey); return true; }
+  fence(taskKey) { const generation = (this.#generation.get(taskKey) ?? 0) + 1; this.#generation.set(taskKey, generation); this.#claims.delete(taskKey); return generation; }
 
   sweepExpired(now = Date.now()) {
     const expired = [];
     for (const [taskKey, claim] of this.#claims) {
-      if (claim.expiresAt <= now) {
-        this.fence(taskKey);
-        expired.push(structuredClone(claim));
-      }
+      if (claim.expiresAt <= now) { this.fence(taskKey); expired.push(structuredClone(claim)); }
     }
     return expired;
   }
 
   list() { return [...this.#claims.values()].map((claim) => structuredClone(claim)); }
 
-  #matches(claim, token) {
-    return Boolean(claim && token && claim.taskKey === token.taskKey && claim.ownerId === token.ownerId && claim.claimId === token.claimId && claim.generation === token.generation);
+  snapshot() {
+    return { version: 1, generations: [...this.#generation.entries()].map(([taskKey, generation]) => ({ taskKey, generation })) };
   }
+
+  restore(snapshot) {
+    if (!snapshot || snapshot.version !== 1) throw new Error('unsupported claim authority snapshot');
+    this.#claims.clear();
+    this.#generation.clear();
+    for (const record of snapshot.generations ?? []) this.#generation.set(record.taskKey, Number(record.generation) || 0);
+  }
+
+  #matches(claim, token) { return Boolean(claim && token && claim.taskKey === token.taskKey && claim.ownerId === token.ownerId && claim.claimId === token.claimId && claim.generation === token.generation); }
 }
