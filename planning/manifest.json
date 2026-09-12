@@ -1,0 +1,108 @@
+{
+  "schemaVersion": "1.0",
+  "planVersion": "2026-09-12.1",
+  "target": {
+    "sustainedLeverageTarget": 300,
+    "architectureCeilingDesign": 1000
+  },
+  "budgetPolicy": {
+    "githubHostedComputeUsd": 0,
+    "neonMonthlyTargetUsd": 40,
+    "flyIoEngineeringScaling": "excluded",
+    "cloudflareScalingPolicy": "flat-until-evidence"
+  },
+  "milestones": [
+    {
+      "id": "canonical-planning-feed",
+      "title": "Canonical planning repository feed into Maxxed Admin",
+      "priority": "P0",
+      "statusIntent": "active",
+      "targetLeverageStage": 100,
+      "dependencies": [],
+      "acceptance": [
+        "Admin renders the exact planning source SHA and freshness",
+        "Planning and live execution state remain distinct and reconciled",
+        "Invalid or stale planning data cannot render as current"
+      ],
+      "adminIssues": [883],
+      "sourceDocs": ["ADMIN_INTEGRATION.md", "ARCHITECTURE.md"]
+    },
+    {
+      "id": "leverage-telemetry",
+      "title": "Accepted-output and owner-attention leverage telemetry",
+      "priority": "P0",
+      "statusIntent": "planned",
+      "targetLeverageStage": 100,
+      "dependencies": ["canonical-planning-feed"],
+      "acceptance": [
+        "Accepted output excludes failed, superseded and reverted work",
+        "Owner attention is not inferred from wall-clock time",
+        "Admin reports leverage with methodology and confidence coverage"
+      ],
+      "adminIssues": [884],
+      "sourceDocs": ["THROUGHPUT_MODEL.md"]
+    },
+    {
+      "id": "budget-capacity-governance",
+      "title": "Infrastructure budget and capacity governance",
+      "priority": "P0",
+      "statusIntent": "planned",
+      "targetLeverageStage": 100,
+      "dependencies": ["canonical-planning-feed"],
+      "acceptance": [
+        "GitHub hosted compute policy remains zero",
+        "Neon target is configurable at or below forty USD before scale-up",
+        "Fly.io prediction workload is excluded from engineering scaling",
+        "Capacity increases require measured bottleneck evidence"
+      ],
+      "adminIssues": [885],
+      "sourceDocs": ["COST_MODEL.md", "DATA_ARCHITECTURE.md"]
+    },
+    {
+      "id": "portfolio-scheduler",
+      "title": "Portfolio critical-path scheduler and dynamic lane allocation",
+      "priority": "P0",
+      "statusIntent": "planned",
+      "targetLeverageStage": 300,
+      "dependencies": ["budget-capacity-governance", "leverage-telemetry"],
+      "acceptance": [
+        "Safe ready work fills available compatible lanes without owner assignment",
+        "Blocked high-priority work cannot starve independent ready work",
+        "Verification and repair congestion applies backpressure",
+        "Every dispatch is explainable from a captured policy/state snapshot"
+      ],
+      "adminIssues": [886],
+      "sourceDocs": ["LANE_MODEL.md", "AGENT_ROLES.md", "FAILURE_RECOVERY.md"]
+    },
+    {
+      "id": "product-factories",
+      "title": "Governed product factories and shared-platform propagation",
+      "priority": "P1",
+      "statusIntent": "planned",
+      "targetLeverageStage": 300,
+      "dependencies": ["portfolio-scheduler"],
+      "acceptance": [
+        "WordPress, Android, web/SaaS, static-site and Unity factory contracts exist",
+        "Shared platform reuse reduces incremental bespoke effort",
+        "Architecture drift is detectable and routed into governed work"
+      ],
+      "adminIssues": [],
+      "sourceDocs": ["PRODUCT_FACTORIES.md"]
+    },
+    {
+      "id": "legacy-retirement-terminal-proof",
+      "title": "Legacy retirement and sustained end-state proof",
+      "priority": "P1",
+      "statusIntent": "planned",
+      "targetLeverageStage": 300,
+      "dependencies": ["product-factories"],
+      "acceptance": [
+        "Superseded schedulers, queues and duplicate state authorities are removed",
+        "Chaos and recovery scenarios pass",
+        "Sustained accepted throughput is exception-driven and bottleneck-aware"
+      ],
+      "adminIssues": [794, 798],
+      "sourceDocs": ["MIGRATION_PLAN.md", "ROADMAP.md"]
+    }
+  ]
+}
