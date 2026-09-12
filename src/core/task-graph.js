@@ -53,13 +53,24 @@ export class TaskGraph {
     return this.get(next.key);
   }
 
-  get(key) {
-    const task = this.#tasks.get(key);
-    return task ? structuredClone(task) : null;
-  }
+  get(key) { const task = this.#tasks.get(key); return task ? structuredClone(task) : null; }
+  list() { return [...this.#tasks.values()].map((task) => structuredClone(task)); }
 
-  list() {
-    return [...this.#tasks.values()].map((task) => structuredClone(task));
+  snapshot() { return { version: 1, tasks: this.list() }; }
+
+  restore(snapshot, now = Date.now()) {
+    if (!snapshot || snapshot.version !== 1) throw new Error('unsupported task graph snapshot');
+    this.#tasks.clear();
+    for (const input of snapshot.tasks ?? []) {
+      const task = normalizeTask(input);
+      if (task.state === TaskState.CLAIMED) {
+        task.state = task.metadata?.restartable === false ? TaskState.BLOCKED : TaskState.READY;
+        task.lineage.push({ at: now, state: task.state, evidence: { reason: 'control-plane restart invalidated active claim' } });
+      }
+      this.#tasks.set(task.key, task);
+    }
+    this.#assertAcyclic();
+    return this.list();
   }
 
   setState(key, state, evidence = null) {
@@ -84,20 +95,9 @@ export class TaskGraph {
     return reasons;
   }
 
-  isExecutable(key) {
-    return this.blockerReasons(key).length === 0;
-  }
-
-  frontier(predicate = () => true) {
-    return this.list()
-      .filter((task) => predicate(task) && this.isExecutable(task.key))
-      .sort((a, b) => a.key.localeCompare(b.key));
-  }
-
-  dependentsOf(key) {
-    return this.list().filter((task) => task.dependencies.includes(key));
-  }
-
+  isExecutable(key) { return this.blockerReasons(key).length === 0; }
+  frontier(predicate = () => true) { return this.list().filter((task) => predicate(task) && this.isExecutable(task.key)).sort((a, b) => a.key.localeCompare(b.key)); }
+  dependentsOf(key) { return this.list().filter((task) => task.dependencies.includes(key)); }
   unlockCount(key) {
     return this.dependentsOf(key).filter((task) => {
       const remaining = task.dependencies.filter((dep) => dep !== key);
@@ -105,23 +105,16 @@ export class TaskGraph {
     }).length;
   }
 
-  #require(key) {
-    const task = this.#tasks.get(key);
-    if (!task) throw new Error(`unknown task: ${key}`);
-    return task;
-  }
-
+  #require(key) { const task = this.#tasks.get(key); if (!task) throw new Error(`unknown task: ${key}`); return task; }
   #assertAcyclic() {
-    const visiting = new Set();
-    const visited = new Set();
+    const visiting = new Set(); const visited = new Set();
     const visit = (key) => {
       if (visited.has(key)) return;
       if (visiting.has(key)) throw new Error(`dependency cycle detected at ${key}`);
       visiting.add(key);
       const task = this.#tasks.get(key);
       for (const dep of task?.dependencies ?? []) if (this.#tasks.has(dep)) visit(dep);
-      visiting.delete(key);
-      visited.add(key);
+      visiting.delete(key); visited.add(key);
     };
     for (const key of this.#tasks.keys()) visit(key);
   }
