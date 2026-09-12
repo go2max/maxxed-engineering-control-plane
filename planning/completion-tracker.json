@@ -1,90 +1,14 @@
 {
   "version": 1,
-  "updated_at": "2026-09-12T22:29:00Z",
-  "retirement_policy": {
-    "completion_required_pct": 100,
-    "validation_passes_required": 2,
-    "clear_only_when_both_true": true
-  },
+  "updated_at": "2026-09-12T22:34:00Z",
+  "retirement_policy": { "completion_required_pct": 100, "validation_passes_required": 2, "clear_only_when_both_true": true },
   "categories": [
-    {
-      "id": "compute-fabric",
-      "name": "Local Compute Fabric",
-      "completion_pct": 100,
-      "validation_passes": 1,
-      "clear_eligible": false,
-      "status": "complete-awaiting-second-pass",
-      "evidence": [
-        "Maxxed-Technical-Systems/maxxed-local-compute-fabric PRs #2-#28 merged",
-        "direct Node 22 validation 7/7 tests passed",
-        "worker failover, fencing, reassignment, restart persistence and operator controls implemented"
-      ]
-    },
-    {
-      "id": "control-plane-core",
-      "name": "Engineering Control Plane Core",
-      "completion_pct": 28,
-      "validation_passes": 0,
-      "clear_eligible": false,
-      "status": "implementation",
-      "evidence": [
-        "canonical architecture, task/acceptance contracts, planning manifest and source-of-truth ADRs merged",
-        "executable normalized task graph with dedupe, dependency-cycle prevention, blocker reasons, executable frontier, lineage and dependency unlock counting implemented"
-      ]
-    },
-    {
-      "id": "portfolio-scheduler",
-      "name": "Portfolio Scheduler and Dynamic Lanes",
-      "completion_pct": 30,
-      "validation_passes": 0,
-      "clear_eligible": false,
-      "status": "implementation",
-      "evidence": [
-        "lane model and scheduling architecture defined",
-        "executable priority scorer, dependency-unlock weighting, starvation bonus, repository lane caps, total lane cap, heterogeneous worker matching and explainable dispatch records implemented"
-      ]
-    },
-    {
-      "id": "verifier-repair",
-      "name": "Verifier and Repair Fabric",
-      "completion_pct": 30,
-      "validation_passes": 0,
-      "clear_eligible": false,
-      "status": "implementation",
-      "evidence": [
-        "acceptance and failure-recovery contracts defined",
-        "independent acceptance verifier, explicit failure taxonomy, bounded repair attempts, repeated-failure circuit breaker and escalation path implemented"
-      ]
-    },
-    {
-      "id": "local-model-router",
-      "name": "Local AI / Model Router",
-      "completion_pct": 28,
-      "validation_passes": 0,
-      "clear_eligible": false,
-      "status": "implementation",
-      "evidence": [
-        "local-first architecture direction established",
-        "executable model registry, health-aware capability/context/cost routing, local-first selection with external escalation disabled by default, and OpenAI-compatible local inference client boundary implemented"
-      ]
-    },
-    {
-      "id": "admin-integration",
-      "name": "Maxxed Admin Operator Integration",
-      "completion_pct": 14,
-      "validation_passes": 0,
-      "clear_eligible": false,
-      "status": "implementation",
-      "evidence": ["integration contract plus Maxxed-Tech-Site issues #883-#886 created; runtime projection/actions pending"]
-    },
-    {
-      "id": "saas-web-factory",
-      "name": "SaaS / Web Product Factory",
-      "completion_pct": 9,
-      "validation_passes": 0,
-      "clear_eligible": false,
-      "status": "implementation",
-      "evidence": ["product-factory architecture defined; executable factory pipeline pending"]
-    }
+    {"id":"compute-fabric","name":"Local Compute Fabric","completion_pct":100,"validation_passes":1,"clear_eligible":false,"status":"complete-awaiting-second-pass","evidence":["Maxxed-Technical-Systems/maxxed-local-compute-fabric PRs #2-#28 merged","direct Node 22 validation 7/7 tests passed","worker failover, fencing, reassignment, restart persistence and operator controls implemented"]},
+    {"id":"control-plane-core","name":"Engineering Control Plane Core","completion_pct":40,"validation_passes":0,"clear_eligible":false,"status":"implementation","evidence":["canonical architecture, task/acceptance contracts, planning manifest and source-of-truth ADRs merged","executable normalized task graph with dedupe, dependency-cycle prevention, blocker reasons, executable frontier, lineage and dependency unlock counting implemented","global task claim authority with scope locks, expiry, renewal, fencing generations and stale-token rejection implemented"]},
+    {"id":"portfolio-scheduler","name":"Portfolio Scheduler and Dynamic Lanes","completion_pct":30,"validation_passes":0,"clear_eligible":false,"status":"implementation","evidence":["lane model and scheduling architecture defined","executable priority scorer, dependency-unlock weighting, starvation bonus, repository lane caps, total lane cap, heterogeneous worker matching and explainable dispatch records implemented"]},
+    {"id":"verifier-repair","name":"Verifier and Repair Fabric","completion_pct":30,"validation_passes":0,"clear_eligible":false,"status":"implementation","evidence":["acceptance and failure-recovery contracts defined","independent acceptance verifier, explicit failure taxonomy, bounded repair attempts, repeated-failure circuit breaker and escalation path implemented"]},
+    {"id":"local-model-router","name":"Local AI / Model Router","completion_pct":28,"validation_passes":0,"clear_eligible":false,"status":"implementation","evidence":["local-first architecture direction established","executable model registry, health-aware capability/context/cost routing, local-first selection with external escalation disabled by default, and OpenAI-compatible local inference client boundary implemented"]},
+    {"id":"admin-integration","name":"Maxxed Admin Operator Integration","completion_pct":14,"validation_passes":0,"clear_eligible":false,"status":"implementation","evidence":["integration contract plus Maxxed-Tech-Site issues #883-#886 created; runtime projection/actions pending"]},
+    {"id":"saas-web-factory","name":"SaaS / Web Product Factory","completion_pct":9,"validation_passes":0,"clear_eligible":false,"status":"implementation","evidence":["product-factory architecture defined; executable factory pipeline pending"]}
   ]
 }
