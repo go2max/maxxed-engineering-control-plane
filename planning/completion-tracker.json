@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": "2026-09-12T22:17:00Z",
+  "updated_at": "2026-09-12T22:20:00Z",
   "retirement_policy": {
     "completion_required_pct": 100,
     "validation_passes_required": 2,
@@ -35,11 +35,14 @@
     {
       "id": "portfolio-scheduler",
       "name": "Portfolio Scheduler and Dynamic Lanes",
-      "completion_pct": 12,
+      "completion_pct": 30,
       "validation_passes": 0,
       "clear_eligible": false,
       "status": "implementation",
-      "evidence": ["lane model and scheduling architecture defined; runtime scheduler not yet complete"]
+      "evidence": [
+        "lane model and scheduling architecture defined",
+        "executable priority scorer, dependency-unlock weighting, starvation bonus, repository lane caps, total lane cap, heterogeneous worker matching and explainable dispatch records implemented"
+      ]
     },
     {
       "id": "verifier-repair",
