@@ -5,6 +5,7 @@
   "type": "module",
   "engines": { "node": ">=22" },
   "scripts": {
+    "start": "node src/service/main.js",
     "test": "node --test"
   }
 }
