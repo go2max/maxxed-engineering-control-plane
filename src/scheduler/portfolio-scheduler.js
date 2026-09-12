@@ -3,6 +3,8 @@ function requirementMatch(worker, task) {
   const metadata = worker.metadata ?? {};
   const capacity = worker.capacity ?? {};
   const capabilities = new Set(worker.capabilities ?? []);
+  if (worker.state && !['AVAILABLE', 'BUSY'].includes(worker.state)) return false;
+  if ((worker.pressure?.cpuPct ?? 0) >= 95) return false;
   if (req.os && req.os !== 'any' && metadata.os !== req.os) return false;
   if (req.arch && metadata.arch !== req.arch) return false;
   if ((req.capabilities ?? []).some((cap) => !capabilities.has(cap))) return false;
@@ -23,30 +25,54 @@ export function scoreTask(graph, task, { now = Date.now(), starvationMs = 30 * 6
   return { score, priority, unlock, starvationSteps, riskPenalty, failurePenalty };
 }
 
+export function adaptiveLaneCapacity(workers, hardLimit = 16) {
+  let capacity = 0;
+  for (const worker of workers) {
+    if (worker.state && !['AVAILABLE', 'BUSY'].includes(worker.state)) continue;
+    const cpu = worker.pressure?.cpuPct ?? 0;
+    if (cpu >= 95) continue;
+    const slots = Math.max(0, worker.capacity?.freeSlots ?? 0);
+    const pressureFactor = cpu >= 85 ? 0.25 : cpu >= 70 ? 0.5 : 1;
+    capacity += Math.floor(slots * pressureFactor);
+  }
+  return Math.max(0, Math.min(hardLimit, capacity));
+}
+
 export class PortfolioScheduler {
-  constructor({ graph, repoLaneLimit = 2, totalLaneLimit = 16 } = {}) {
+  constructor({ graph, repoLaneLimit = 2, totalLaneLimit = 16, repoLaneLimits = {} } = {}) {
     if (!graph) throw new Error('graph is required');
     this.graph = graph;
     this.repoLaneLimit = repoLaneLimit;
     this.totalLaneLimit = totalLaneLimit;
+    this.repoLaneLimits = { ...repoLaneLimits };
   }
 
-  plan(workers, { now = Date.now(), activeClaims = [] } = {}) {
+  plan(workers, options = {}) { return this.planWithReport(workers, options).dispatches; }
+
+  planWithReport(workers, { now = Date.now(), activeClaims = [] } = {}) {
     const repoUsage = new Map();
-    for (const claim of activeClaims) {
-      if (claim.repository) repoUsage.set(claim.repository, (repoUsage.get(claim.repository) ?? 0) + 1);
-    }
+    for (const claim of activeClaims) if (claim.repository) repoUsage.set(claim.repository, (repoUsage.get(claim.repository) ?? 0) + 1);
 
     const workerSlots = new Map(workers.map((worker) => [worker.workerId, Math.max(0, worker.capacity?.freeSlots ?? 0)]));
+    const adaptiveLimit = adaptiveLaneCapacity(workers, this.totalLaneLimit);
+    const remainingLaneBudget = Math.max(0, adaptiveLimit - activeClaims.length);
     const candidates = this.graph.frontier().map((task) => ({ task, scoring: scoreTask(this.graph, task, { now }) }))
       .sort((a, b) => b.scoring.score - a.scoring.score || a.task.key.localeCompare(b.task.key));
 
     const dispatches = [];
+    const backpressure = [];
     for (const candidate of candidates) {
-      if (dispatches.length + activeClaims.length >= this.totalLaneLimit) break;
       const { task, scoring } = candidate;
       const repo = task.repository ?? '__unscoped__';
-      if ((repoUsage.get(repo) ?? 0) >= this.repoLaneLimit) continue;
+      if (dispatches.length >= remainingLaneBudget) {
+        backpressure.push({ taskKey: task.key, reason: 'global-lane-capacity', adaptiveLimit, activeClaims: activeClaims.length });
+        continue;
+      }
+      const repoLimit = this.repoLaneLimits[repo] ?? this.repoLaneLimit;
+      if ((repoUsage.get(repo) ?? 0) >= repoLimit) {
+        backpressure.push({ taskKey: task.key, reason: 'repository-wip-limit', repository: task.repository, limit: repoLimit });
+        continue;
+      }
       const eligible = workers
         .filter((worker) => (workerSlots.get(worker.workerId) ?? 0) > 0 && requirementMatch(worker, task))
         .sort((a, b) => {
@@ -55,7 +81,10 @@ export class PortfolioScheduler {
           return (a.pressure?.cpuPct ?? 0) - (b.pressure?.cpuPct ?? 0);
         });
       const worker = eligible[0];
-      if (!worker) continue;
+      if (!worker) {
+        backpressure.push({ taskKey: task.key, reason: 'no-eligible-worker', requirements: task.requirements ?? {} });
+        continue;
+      }
       workerSlots.set(worker.workerId, workerSlots.get(worker.workerId) - 1);
       repoUsage.set(repo, (repoUsage.get(repo) ?? 0) + 1);
       dispatches.push({
@@ -70,10 +99,12 @@ export class PortfolioScheduler {
           riskPenalty: scoring.riskPenalty,
           failurePenalty: scoring.failurePenalty,
           workerFreeSlotsBefore: workerSlots.get(worker.workerId) + 1,
-          workerCpuPct: worker.pressure?.cpuPct ?? 0
+          workerCpuPct: worker.pressure?.cpuPct ?? 0,
+          adaptiveLaneLimit: adaptiveLimit,
+          repositoryLaneLimit: repoLimit
         }
       });
     }
-    return dispatches;
+    return { dispatches, backpressure, adaptiveLimit, remainingLaneBudget };
   }
 }
