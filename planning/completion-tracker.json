@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": "2026-09-12T22:20:00Z",
+  "updated_at": "2026-09-12T22:24:00Z",
   "retirement_policy": {
     "completion_required_pct": 100,
     "validation_passes_required": 2,
@@ -47,11 +47,14 @@
     {
       "id": "verifier-repair",
       "name": "Verifier and Repair Fabric",
-      "completion_pct": 10,
+      "completion_pct": 30,
       "validation_passes": 0,
       "clear_eligible": false,
       "status": "implementation",
-      "evidence": ["acceptance and failure-recovery contracts defined; executable verifier/repair runtime pending"]
+      "evidence": [
+        "acceptance and failure-recovery contracts defined",
+        "independent acceptance verifier, explicit failure taxonomy, bounded repair attempts, repeated-failure circuit breaker and escalation path implemented"
+      ]
     },
     {
       "id": "local-model-router",
