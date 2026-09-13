@@ -55,4 +55,13 @@ export class ModelEvalLedger {
       return al - bl;
     });
   }
+
+  snapshot() { return { version: 1, records: [...this.#records.entries()] }; }
+
+  restore(snapshot) {
+    if (!snapshot || snapshot.version !== 1) throw new Error('unsupported model eval snapshot');
+    this.#records = new Map((snapshot.records ?? []).map(([key, value]) => [key, structuredClone(value)]));
+  }
+
+  list() { return [...this.#records.values()].map((record) => structuredClone(record)); }
 }
