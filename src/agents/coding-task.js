@@ -3,15 +3,16 @@ function slug(value) {
 }
 
 export function compileCodingTask({
-  key, repository, repoPath, objective, acceptance = {}, testCommands = [], dependencies = [],
+  key, repository, repoPath = null, objective, acceptance = {}, testCommands = [], dependencies = [],
   priority = 0, riskClass = 'normal', taskClass = 'standard', ref = 'HEAD', baseBranch = 'main', maxSteps = 24,
-  autoCommit = true, autoPush = true, branchPrefix = 'maxxed/agent', modelRequest = null
+  autoCommit = true, autoPush = true, branchPrefix = 'maxxed/agent', modelRequest = null, microSharding = null
 } = {}) {
   if (!key) throw new Error('coding task key is required');
-  if (!repository) throw new Error('repository is required');
-  if (!repoPath) throw new Error('repoPath is required');
+  if (!repository || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(String(repository))) throw new Error('repository must be owner/name');
+  if (repoPath != null && typeof repoPath !== 'string') throw new Error('repoPath must be a string when supplied');
   if (!objective) throw new Error('objective is required');
   if (!Array.isArray(testCommands)) throw new Error('testCommands must be an array');
+  if (microSharding != null && typeof microSharding !== 'object') throw new Error('microSharding must be an object when supplied');
   const branchBase = `${branchPrefix}/${slug(key)}`;
   const requiredChecks = acceptance.requiredChecks ?? testCommands.map((entry, index) => entry.name ?? `test-${index + 1}`);
   const normalizedAcceptance = {
@@ -43,7 +44,7 @@ export function compileCodingTask({
       modelRequest: normalizedModelRequest,
       execution: {
         kind: 'coding-agent',
-        repoPath,
+        ...(repoPath ? { repoPath } : {}),
         ref,
         baseBranch,
         branchBase,
@@ -54,7 +55,8 @@ export function compileCodingTask({
         autoCommit: Boolean(autoCommit),
         autoPush: Boolean(autoPush),
         commitMessage: `maxxed: ${String(objective).slice(0, 120)}`,
-        taskKey: key
+        taskKey: key,
+        ...(microSharding ? { microSharding: structuredClone(microSharding) } : {})
       }
     }
   };
@@ -68,6 +70,10 @@ export function fabricTaskFromDispatch(task, dispatch) {
   const branchName = `${execution.branchBase}-g${generation}`;
   const selectedModel = dispatch.modelSelection?.model ?? null;
   if (task.metadata?.modelRequest && !selectedModel?.endpoint) throw new Error('coding task requires a routed local model endpoint');
+  const patchBundle = execution.patchBundle ? {
+    ...structuredClone(execution.patchBundle),
+    generation
+  } : null;
   return {
     taskId: dispatch.claim.claimId,
     repository: task.repository,
@@ -83,7 +89,8 @@ export function fabricTaskFromDispatch(task, dispatch) {
       publishAfterLeaseValidation: Boolean(execution.autoPush),
       autoPush: false,
       controlPlaneTaskKey: task.key,
-      controlPlaneClaim: dispatch.claim
+      controlPlaneClaim: dispatch.claim,
+      ...(patchBundle ? { patchBundle } : {})
     }
   };
 }

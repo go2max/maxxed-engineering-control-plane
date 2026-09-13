@@ -48,13 +48,14 @@ export function adaptiveLaneCapacity(workers, hardLimit = 16) {
 }
 
 export class PortfolioScheduler {
-  constructor({ graph, repoLaneLimit = 2, totalLaneLimit = 16, repoLaneLimits = {}, policy = null } = {}) {
+  constructor({ graph, repoLaneLimit = 2, totalLaneLimit = 16, repoLaneLimits = {}, policy = null, performanceLedger = null } = {}) {
     if (!graph) throw new Error('graph is required');
     this.graph = graph;
     this.repoLaneLimit = repoLaneLimit;
     this.totalLaneLimit = totalLaneLimit;
     this.repoLaneLimits = { ...repoLaneLimits };
     this.policy = policy;
+    this.performanceLedger = performanceLedger;
   }
 
   plan(workers, options = {}) { return this.planWithReport(workers, options).dispatches; }
@@ -91,9 +92,15 @@ export class PortfolioScheduler {
         backpressure.push({ taskKey: task.key, reason: 'repository-wip-limit', repository: task.repository, limit: repoLimit });
         continue;
       }
+      const taskClass = task.taskClass ?? 'standard';
+      const language = task.requirements?.language ?? task.metadata?.language ?? 'any';
       const eligible = workers
         .filter((worker) => (workerSlots.get(worker.workerId) ?? 0) > 0 && requirementMatch(worker, task))
-        .map((worker) => ({ worker, suitability: workerSuitability({ ...worker, capacity: { ...worker.capacity, freeSlots: workerSlots.get(worker.workerId) } }, task) }))
+        .map((worker) => {
+          const suitability = workerSuitability({ ...worker, capacity: { ...worker.capacity, freeSlots: workerSlots.get(worker.workerId) } }, task);
+          const learned = this.performanceLedger?.stats(worker.workerId, taskClass, language) ?? null;
+          return { worker, suitability: { ...suitability, baseScore: suitability.score, learnedSpecializationScore: learned?.specializationScore ?? 0, predictedDurationMs: learned?.predictedDurationMs ?? null, learnedRuns: learned?.runs ?? 0, score: suitability.score + (learned?.specializationScore ?? 0) } };
+        })
         .sort((a, b) => b.suitability.score - a.suitability.score || a.worker.workerId.localeCompare(b.worker.workerId));
       const selected = eligible[0];
       if (!selected) {
