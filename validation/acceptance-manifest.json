@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "policy": {
+    "required_passes": 2,
+    "runner_scope": "Maxxed-Technical-Systems organization-scoped local self-hosted only",
+    "forbid_github_hosted": true,
+    "forbid_repository_scoped_self_hosted": true,
+    "node_major": 22
+  },
+  "categories": {
+    "compute-fabric": {
+      "required": ["worker-liveness", "lease-fencing", "offline-reassignment", "stale-result-rejection", "restart-recovery", "enrollment-and-capability-advertising"]
+    },
+    "control-plane-core": {
+      "required": ["task-graph", "claim-authority", "idempotency", "persistence", "readiness", "event-journal", "service-api"]
+    },
+    "portfolio-scheduler": {
+      "required": ["critical-path", "fairness", "dynamic-lanes", "pressure-contraction", "affinity", "policy-controls", "dispatch-audit"]
+    },
+    "verifier-repair": {
+      "required": ["independent-verifier", "evidence-digest", "repair-task-synthesis", "repair-gate", "reconciliation-gate", "verification-ledger"]
+    },
+    "local-model-router": {
+      "required": ["local-only-routing", "artifact-integrity", "health-and-circuit-breaker", "concurrency", "fabric-discovery", "offline-model-demotion", "request-budget"]
+    },
+    "admin-integration": {
+      "required": ["authoritative-projection", "bounded-commands", "loopback-only", "stale-unreachable-state", "timeout", "operator-summary"]
+    },
+    "saas-web-factory": {
+      "required": ["shared-baseline", "product-delta", "stage-evidence", "exact-promotion-lineage", "production-verification", "rollback", "release-ledger", "snapshot-restore"]
+    }
+  }
+}
