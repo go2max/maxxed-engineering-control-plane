@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { compileCodingTask, fabricTaskFromDispatch } from '../src/agents/coding-task.js';
 import { ThroughputGovernor } from '../src/scheduler/throughput-governor.js';
+import { synthesizeRepairTask } from '../src/verification/evidence-bundle.js';
 
 test('coding task compiler produces bounded generation-scoped fabric payload', () => {
   const task = compileCodingTask({
@@ -23,6 +24,22 @@ test('coding task compiler produces bounded generation-scoped fabric payload', (
   assert.equal(fabric.payload.branchName, 'maxxed/agent/issue-123-g3');
   assert.equal(fabric.payload.autoPush, false);
   assert.equal(fabric.payload.publishAfterLeaseValidation, true);
+});
+
+test('coding repair task continues from failed attempt commit', () => {
+  const task = compileCodingTask({ key: 'issue-124', repository: 'Maxxed-Technical-Systems/demo', repoPath: 'C:/repos/demo', objective: 'Fix unit tests', testCommands: [{ name: 'unit', command: 'npm', args: ['test'] }] });
+  const repair = synthesizeRepairTask({
+    task,
+    verification: { failed: ['unit'], failureClasses: ['TEST_FAILURE'], reason: 'unit failed' },
+    evidence: { artifacts: { commitSha: 'deadbeef' } },
+    attempt: 1
+  });
+  assert.equal(repair.state, 'READY');
+  assert.equal(repair.metadata.execution.kind, 'coding-agent');
+  assert.equal(repair.metadata.execution.ref, 'deadbeef');
+  assert.match(repair.metadata.execution.branchBase, /repair-1$/);
+  assert.equal(repair.metadata.execution.autoPush, true);
+  assert.equal(repair.metadata.repairOf, 'issue-124');
 });
 
 test('throughput governor doubles healthy baseline but contracts on backpressure', () => {
