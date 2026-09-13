@@ -16,10 +16,10 @@ export class EngineeringOrchestrator {
     this.telemetry = telemetry;
   }
 
-  dispatch(workers, { now = Date.now(), taskPredicate = () => true } = {}) {
+  dispatch(workers, { now = Date.now(), taskPredicate = () => true, admissionDecision = {} } = {}) {
     this.recoverExpired(now);
     const activeClaims = this.claims.list().map((claim) => ({ taskKey: claim.taskKey, repository: this.graph.get(claim.taskKey)?.repository ?? null, workerId: claim.ownerId }));
-    const proposed = this.scheduler.plan(workers, { now, activeClaims, taskPredicate });
+    const proposed = this.scheduler.plan(workers, { now, activeClaims, taskPredicate, admissionDecision });
     const accepted = [];
     for (const dispatch of proposed) {
       const task = this.graph.get(dispatch.taskKey);
