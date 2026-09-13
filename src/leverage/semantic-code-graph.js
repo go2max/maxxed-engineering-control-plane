@@ -31,6 +31,6 @@ export class SemanticCodeGraph {
   }
 
   impactedBy(nodeIds = [], options = {}) { return this.dependencySlice(nodeIds, { depth: options.depth ?? 3, edgeTypes: options.edgeTypes ?? ['imports','references','calls','tests','implements','depends-on'], maxNodes: options.maxNodes ?? 500 }); }
-  snapshot() { return { version: 1, nodes: [...this.nodes.values()].map(structuredClone), edges: [...this.edges.values()].map(structuredClone) }; }
+  snapshot() { return { version: 1, nodes: [...this.nodes.values()].map((node) => structuredClone(node)), edges: [...this.edges.values()].map((edge) => structuredClone(edge)) }; }
   restore(snapshot) { this.nodes.clear(); this.edges.clear(); this.out.clear(); this.in.clear(); for (const node of snapshot?.nodes ?? []) this.upsertNode(node); for (const edge of snapshot?.edges ?? []) this.addEdge(edge); }
 }
