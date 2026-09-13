@@ -15,7 +15,7 @@ export class EngineeringOrchestrator {
   }
 
   dispatch(workers, { now = Date.now(), taskPredicate = () => true } = {}) {
-    this.claims.sweepExpired(now);
+    this.recoverExpired(now);
     const activeClaims = this.claims.list().map((claim) => ({ taskKey: claim.taskKey, repository: this.graph.get(claim.taskKey)?.repository ?? null, workerId: claim.ownerId }));
     const proposed = this.scheduler.plan(workers, { now, activeClaims, taskPredicate });
     const accepted = [];
