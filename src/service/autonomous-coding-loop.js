@@ -3,10 +3,14 @@ import { fabricTaskFromDispatch } from '../agents/coding-task.js';
 
 const isCodingTask = (task) => task?.metadata?.execution?.kind === 'coding-agent';
 
+function acceptedBundle(task) {
+  return [...(task?.lineage ?? [])].reverse().find((entry) => entry.state === TaskState.ACCEPTED && entry.evidence?.evidenceBundle)?.evidence?.evidenceBundle ?? null;
+}
+
 export class AutonomousCodingLoop {
-  constructor({ runtime, fabricClient, promotion = null, intervalMs = 2_000, now = () => Date.now() } = {}) {
+  constructor({ runtime, fabricClient, promotion = null, leverage = null, intervalMs = 2_000, now = () => Date.now() } = {}) {
     if (!runtime || !fabricClient) throw new Error('runtime and fabricClient are required');
-    this.runtime = runtime; this.fabric = fabricClient; this.promotion = promotion; this.intervalMs = Math.max(500, Number(intervalMs)); this.now = now;
+    this.runtime = runtime; this.fabric = fabricClient; this.promotion = promotion; this.leverage = leverage; this.intervalMs = Math.max(500, Number(intervalMs)); this.now = now;
     this.timer = null; this.running = false; this.lastTick = null;
   }
 
@@ -21,6 +25,25 @@ export class AutonomousCodingLoop {
 
   stop() { if (this.timer) clearInterval(this.timer); this.timer = null; }
 
+  #harvest(reconciled, now) {
+    if (!this.leverage) return [];
+    const harvested = [];
+    for (const row of reconciled) {
+      const task = this.runtime.graph.get(row.taskKey);
+      if (task) {
+        if (row.action === 'ACCEPT') {
+          const bundle = acceptedBundle(task);
+          if (bundle) harvested.push(this.leverage.recordAccepted(task, bundle, { now }));
+        } else if (row.action) harvested.push(this.leverage.recordOutcome(task, row.action, { fabricTaskId: row.fabricTaskId ?? null, branchName: row.branchName ?? null, commitSha: row.commitSha ?? null }));
+      }
+      if (row.parentTaskKey && row.parentState === TaskState.ACCEPTED) {
+        const parent = this.runtime.graph.get(row.parentTaskKey); const bundle = acceptedBundle(parent);
+        if (parent && bundle) harvested.push(this.leverage.recordAccepted(parent, bundle, { now }));
+      }
+    }
+    return harvested.filter(Boolean);
+  }
+
   async tick() {
     if (this.running || this.runtime.paused) return this.lastTick;
     this.running = true;
@@ -28,6 +51,7 @@ export class AutonomousCodingLoop {
     try {
       this.runtime.recoverExpired(now);
       const reconciled = await this.runtime.reconcileFabric(now);
+      const harvested = this.#harvest(reconciled, now);
       const promoted = this.promotion ? await this.promotion.sync(now) : [];
       const workers = await this.runtime.workerProvider();
       this.runtime.reconcileModels(workers, now);
@@ -44,11 +68,8 @@ export class AutonomousCodingLoop {
       const previousLimit = this.runtime.scheduler.totalLaneLimit;
       let dispatches;
       this.runtime.scheduler.totalLaneLimit = Math.max(1, throughput.allowedConcurrency || 1);
-      try {
-        dispatches = this.runtime.orchestrator.dispatch(workers, { now, taskPredicate: isCodingTask });
-      } finally {
-        this.runtime.scheduler.totalLaneLimit = previousLimit;
-      }
+      try { dispatches = this.runtime.orchestrator.dispatch(workers, { now, taskPredicate: isCodingTask }); }
+      finally { this.runtime.scheduler.totalLaneLimit = previousLimit; }
 
       const submitted = [];
       for (const dispatch of dispatches) {
@@ -63,7 +84,7 @@ export class AutonomousCodingLoop {
           this.runtime.journal.append('coding.task.submit-failed', { taskKey: task.key, error: error.message }, now);
         }
       }
-      this.lastTick = { at: now, reconciled, promoted, submitted, throughput };
+      this.lastTick = { at: now, reconciled, harvested, promoted, submitted, throughput };
       return structuredClone(this.lastTick);
     } finally { this.running = false; }
   }
