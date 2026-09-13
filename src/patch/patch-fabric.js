@@ -79,6 +79,16 @@ export class PatchFabric {
     return this.get(sessionId);
   }
 
+  fail(sessionId, { phase = 'shard', error = 'patch session failed', evidence = {}, now = Date.now() } = {}) {
+    const session = this.#require(sessionId);
+    if ([PatchSessionState.ACCEPTED, PatchSessionState.CANCELLED].includes(session.state)) throw new Error(`terminal patch session cannot fail: ${session.state}`);
+    if (session.state === PatchSessionState.FAILED) return this.get(sessionId);
+    session.failures.push({ at: Number(now), phase: String(phase), error: String(error), evidence: structuredClone(evidence) });
+    session.state = PatchSessionState.FAILED;
+    session.updatedAt = Number(now);
+    return this.get(sessionId);
+  }
+
   cancel(sessionId, reason = 'cancelled', now = Date.now()) {
     const session = this.#require(sessionId);
     if (session.state === PatchSessionState.ACCEPTED) throw new Error('accepted patch session cannot be cancelled');
