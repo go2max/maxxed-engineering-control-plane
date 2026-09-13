@@ -1,10 +1,11 @@
-import { TaskGraph } from '../core/task-graph.js';
+import { TaskGraph, TaskState } from '../core/task-graph.js';
 import { ClaimAuthority } from '../core/claim-authority.js';
 import { EngineeringOrchestrator } from '../core/orchestrator.js';
 import { EventJournal } from '../core/event-journal.js';
 import { PortfolioScheduler } from '../scheduler/portfolio-scheduler.js';
 import { SchedulerPolicy } from '../scheduler/scheduler-policy.js';
-import { AcceptanceVerifier } from '../verification/verifier.js';
+import { ThroughputGovernor } from '../scheduler/throughput-governor.js';
+import { AcceptanceVerifier, FailureClass } from '../verification/verifier.js';
 import { RepairController } from '../verification/repair-controller.js';
 import { VerificationLedger } from '../verification/verification-ledger.js';
 import { ModelRegistry } from '../models/model-registry.js';
@@ -14,9 +15,13 @@ import { ModelRuntimeGovernor, LocalModelExecutionPool } from '../models/model-r
 import { ModelFabricDiscovery } from '../models/model-fabric-discovery.js';
 import { LocalInferenceClient } from '../models/local-inference-client.js';
 import { restoreRuntime, snapshotRuntime } from '../core/runtime-state.js';
+import { fabricTaskFromDispatch } from '../agents/coding-task.js';
+import { evidenceFromFabricResult } from './fabric-execution-client.js';
+
+const isCodingTask = (task) => task?.metadata?.execution?.kind === 'coding-agent';
 
 export class ControlPlaneRuntime {
-  constructor({ workerProvider = async () => [], schedulerOptions = {}, modelDefinitions = [], modelClientFactory = null } = {}) {
+  constructor({ workerProvider = async () => [], schedulerOptions = {}, modelDefinitions = [], modelClientFactory = null, fabricExecutionClient = null, throughputOptions = {} } = {}) {
     this.graph = new TaskGraph(); this.claims = new ClaimAuthority(); this.repairs = new RepairController(); this.verifier = new AcceptanceVerifier();
     this.verificationLedger = new VerificationLedger(); this.policy = new SchedulerPolicy(); this.journal = new EventJournal();
     this.modelRegistry = new ModelRegistry(); this.modelEvals = new ModelEvalLedger(); this.modelGovernor = new ModelRuntimeGovernor();
@@ -27,7 +32,8 @@ export class ControlPlaneRuntime {
     this.modelDiscovery = new ModelFabricDiscovery({ registry: this.modelRegistry, governor: this.modelGovernor });
     this.scheduler = new PortfolioScheduler({ graph: this.graph, policy: this.policy, ...schedulerOptions });
     this.orchestrator = new EngineeringOrchestrator({ graph: this.graph, scheduler: this.scheduler, claims: this.claims, verifier: this.verifier, repairs: this.repairs, modelRouter: this.modelRouter, verificationLedger: this.verificationLedger });
-    this.workerProvider = workerProvider; this.paused = false; this.restoredAt = null; this.lastModelDiscovery = null;
+    this.workerProvider = workerProvider; this.fabricExecutionClient = fabricExecutionClient; this.throughput = new ThroughputGovernor(throughputOptions);
+    this.paused = false; this.restoredAt = null; this.lastModelDiscovery = null; this.lastThroughputDecision = null;
   }
 
   ingest(task, { idempotencyKey = null, now = Date.now() } = {}) { return this.journal.once(idempotencyKey, task, () => { const result = this.graph.add(task); this.journal.append('task.ingested', { taskKey: result.key }, now); return result; }); }
@@ -40,13 +46,90 @@ export class ControlPlaneRuntime {
     return result;
   }
 
-  async dispatch(now = Date.now()) {
+  async dispatch(now = Date.now(), { taskPredicate = () => true } = {}) {
     if (this.paused) return [];
     const workers = await this.workerProvider();
     this.reconcileModels(workers, now);
-    const dispatches = this.orchestrator.dispatch(workers, { now });
-    if (dispatches.length) this.journal.append('dispatch.issued', { tasks: dispatches.map((entry) => entry.taskKey), workers: dispatches.map((entry) => entry.workerId) }, now);
-    return dispatches;
+    const verificationRows = this.verificationLedger.entries ?? [];
+    const recent = verificationRows.slice(-50);
+    const recentAccepted = recent.filter((entry) => entry.action === 'ACCEPT').length;
+    const recentFailed = recent.filter((entry) => ['TERMINATE', 'ESCALATE'].includes(entry.action)).length;
+    const verifierBacklog = this.graph.list().filter((task) => task.state === TaskState.BLOCKED && task.lineage?.at(-1)?.evidence?.reason === 'repair-task-created').length;
+    const availableCapacity = workers.reduce((sum, worker) => sum + Math.max(0, worker.capacity?.freeSlots ?? 0), 0);
+    this.lastThroughputDecision = this.throughput.target({ availableCapacity, verifierBacklog, recentAccepted, recentFailed, degraded: !this.readiness().ready });
+    const previousLimit = this.scheduler.totalLaneLimit;
+    this.scheduler.totalLaneLimit = Math.max(1, this.lastThroughputDecision.allowedConcurrency || 1);
+    try {
+      const dispatches = this.orchestrator.dispatch(workers, { now, taskPredicate });
+      if (dispatches.length) this.journal.append('dispatch.issued', { tasks: dispatches.map((entry) => entry.taskKey), workers: dispatches.map((entry) => entry.workerId), throughput: this.lastThroughputDecision }, now);
+      return dispatches;
+    } finally {
+      this.scheduler.totalLaneLimit = previousLimit;
+    }
+  }
+
+  async dispatchToFabric(now = Date.now()) {
+    if (!this.fabricExecutionClient) throw new Error('fabric execution client is not configured');
+    const dispatches = await this.dispatch(now, { taskPredicate: isCodingTask });
+    const submitted = [];
+    for (const dispatch of dispatches) {
+      const task = this.graph.get(dispatch.taskKey);
+      try {
+        const fabricTask = fabricTaskFromDispatch(task, dispatch);
+        const accepted = await this.fabricExecutionClient.enqueue(fabricTask);
+        submitted.push({ taskKey: task.key, workerId: dispatch.workerId, fabricTask: accepted });
+        this.journal.append('fabric.task.submitted', { taskKey: task.key, fabricTaskId: accepted.taskId, workerId: dispatch.workerId }, now);
+      } catch (error) {
+        this.claims.release(dispatch.claim);
+        this.graph.setState(task.key, TaskState.READY, { reason: 'fabric submission failed', error: error.message });
+        this.journal.append('fabric.task.submit-failed', { taskKey: task.key, error: error.message }, now);
+      }
+    }
+    return submitted;
+  }
+
+  async reconcileFabric(now = Date.now()) {
+    if (!this.fabricExecutionClient) throw new Error('fabric execution client is not configured');
+    const fleet = await this.fabricExecutionClient.fleet();
+    const reconciled = [];
+    for (const fabricTask of fleet.tasks ?? []) {
+      if (!['SUCCEEDED', 'FAILED', 'RECONCILE'].includes(fabricTask.state)) continue;
+      const taskKey = fabricTask.payload?.controlPlaneTaskKey;
+      if (!taskKey) continue;
+      const task = this.graph.get(taskKey);
+      if (!task || task.state !== TaskState.CLAIMED) continue;
+      const claim = fabricTask.payload?.controlPlaneClaim;
+      if (!claim || !this.claims.validate(claim, now)) continue;
+
+      if (fabricTask.state === 'RECONCILE') {
+        this.claims.release(claim);
+        this.graph.setState(taskKey, TaskState.BLOCKED, { reason: 'fabric requires reconciliation', fabricTaskId: fabricTask.taskId, failure: fabricTask.failure });
+        reconciled.push({ taskKey, action: 'RECONCILE' });
+        continue;
+      }
+
+      let evidence;
+      if (fabricTask.state === 'SUCCEEDED') evidence = evidenceFromFabricResult(task, fabricTask);
+      else {
+        const required = task.metadata?.acceptance?.requiredChecks ?? ['execution'];
+        evidence = {
+          producerId: fabricTask.preferredWorkerId ?? 'fabric-worker', verifierId: null,
+          checks: Object.fromEntries(required.map((name) => [name, { ok: false, class: FailureClass.BUILD_FAILURE, detail: fabricTask.failure?.error ?? fabricTask.failure ?? 'worker execution failed' }])),
+          artifacts: {}, execution: []
+        };
+      }
+      const result = this.complete({ taskKey, claim, acceptance: task.metadata?.acceptance ?? {}, evidence }, { idempotencyKey: `fabric-result:${fabricTask.taskId}:${fabricTask.updatedAt}`, now });
+      let parentTaskKey = null;
+      let parentState = null;
+      if (result.decision?.action === 'ACCEPT' && task.metadata?.repairOf && task.metadata?.closesParentOnAccept === true) {
+        const parent = this.orchestrator.resolveVerificationGate({ taskKey: task.metadata.repairOf, repairTaskKey: task.key, now });
+        parentTaskKey = parent.key;
+        parentState = parent.state;
+      }
+      reconciled.push({ taskKey, action: result.decision?.action ?? null, fabricTaskId: fabricTask.taskId, branchName: evidence.artifacts?.branchName ?? null, commitSha: evidence.artifacts?.commitSha ?? null, parentTaskKey, parentState });
+    }
+    if (reconciled.length) this.journal.append('fabric.results.reconciled', { results: reconciled }, now);
+    return reconciled;
   }
 
   complete(payload, { idempotencyKey = null, now = Date.now() } = {}) { return this.journal.once(idempotencyKey, payload, () => { const result = this.orchestrator.complete({ ...payload, now }); this.journal.append('task.completed', { taskKey: payload.taskKey, verdict: result.verification?.verdict ?? null, action: result.decision?.action ?? null }, now); return result; }); }
@@ -100,7 +183,7 @@ export class ControlPlaneRuntime {
 
   status() {
     const tasks = this.graph.list(); const claims = this.claims.list(); const stateCounts = Object.fromEntries([...new Set(tasks.map((task) => task.state))].sort().map((state) => [state, tasks.filter((task) => task.state === state).length])); const registeredModels = this.modelRegistry.list();
-    return { paused: this.paused, readiness: this.readiness(), tasks: { total: tasks.length, byState: stateCounts, executable: this.graph.frontier().length }, claims: { active: claims.length }, verification: { records: this.verificationLedger.entries.length, sequence: this.verificationLedger.sequence }, models: { registered: registeredModels.length, healthy: registeredModels.filter((model) => model.healthy && model.enabled).length, runtime: this.modelGovernor.list(), evals: this.modelEvals.list(), fabricDiscovery: this.lastModelDiscovery }, scheduler: { repositoryLaneLimits: { ...this.scheduler.repoLaneLimits }, policy: this.policy.status() } };
+    return { paused: this.paused, readiness: this.readiness(), tasks: { total: tasks.length, byState: stateCounts, executable: this.graph.frontier().length }, claims: { active: claims.length }, verification: { records: this.verificationLedger.entries.length, sequence: this.verificationLedger.sequence }, models: { registered: registeredModels.length, healthy: registeredModels.filter((model) => model.healthy && model.enabled).length, runtime: this.modelGovernor.list(), evals: this.modelEvals.list(), fabricDiscovery: this.lastModelDiscovery }, scheduler: { repositoryLaneLimits: { ...this.scheduler.repoLaneLimits }, policy: this.policy.status(), throughput: this.lastThroughputDecision } };
   }
 
   snapshot() { return { version: 6, core: snapshotRuntime({ graph: this.graph, claims: this.claims, repairs: this.repairs }), policy: this.policy.snapshot(), journal: this.journal.snapshot(), verification: this.verificationLedger.snapshot(), models: { governor: this.modelGovernor.snapshot(), evals: this.modelEvals.snapshot(), lastDiscovery: this.lastModelDiscovery }, paused: this.paused, repositoryLaneLimits: { ...this.scheduler.repoLaneLimits } }; }

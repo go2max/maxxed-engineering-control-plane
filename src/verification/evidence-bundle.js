@@ -3,9 +3,7 @@ import { buildRepairPlan, fingerprintFailure } from './failure-fingerprint.js';
 
 function canonical(value) {
   if (Array.isArray(value)) return value.map(canonical);
-  if (value && typeof value === 'object') {
-    return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonical(value[key])]));
-  }
+  if (value && typeof value === 'object') return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonical(value[key])]));
   return value;
 }
 
@@ -16,15 +14,26 @@ export function buildEvidenceBundle({ taskKey, acceptance = {}, evidence = {}, v
   return { version: 1, taskKey, producerId, verifierId, capturedAt: now, digest, payload };
 }
 
-export function synthesizeRepairTask({ task, verification, attempt = 1 } = {}) {
+export function synthesizeRepairTask({ task, verification, evidence = {}, attempt = 1 } = {}) {
   if (!task?.key) throw new Error('task is required');
   const failedCheck = verification?.failed?.[0] ?? 'unknown';
   const failureClass = verification?.failureClasses?.[0] ?? 'UNKNOWN';
   const failure = { class: failureClass, check: failedCheck, message: verification?.reason ?? 'verification failure' };
   const plan = buildRepairPlan(failure);
   const fingerprint = fingerprintFailure(failure);
+  const key = `${task.key}:repair:${attempt}:${fingerprint.slice(0, 12)}`;
+  const originalExecution = task.metadata?.execution;
+  const codingRepair = originalExecution?.kind === 'coding-agent' ? {
+    ...structuredClone(originalExecution),
+    taskKey: key,
+    branchBase: `${originalExecution.branchBase ?? 'maxxed/agent/repair'}-repair-${attempt}`,
+    ref: evidence?.artifacts?.commitSha ?? originalExecution.ref ?? 'HEAD',
+    goal: `Repair ${task.key}. Failure class: ${failureClass}. Failed check: ${failedCheck}. ${verification?.reason ?? ''} Repair plan: ${(plan?.steps ?? []).join('; ')}`,
+    autoCommit: true,
+    autoPush: true
+  } : null;
   return {
-    key: `${task.key}:repair:${attempt}:${fingerprint.slice(0, 12)}`,
+    key,
     repository: task.repository,
     product: task.product,
     objective: `Repair ${task.key} after ${failureClass}`,
@@ -32,12 +41,17 @@ export function synthesizeRepairTask({ task, verification, attempt = 1 } = {}) {
     taskClass: 'repair',
     requirements: task.requirements ?? {},
     dedupeKey: `${task.key}:repair:${fingerprint}`,
+    state: 'READY',
     metadata: {
       repairOf: task.key,
       repairAttempt: attempt,
       failureFingerprint: fingerprint,
       repairPlan: plan,
-      restartable: true
+      restartable: true,
+      closesParentOnAccept: Boolean(codingRepair),
+      acceptance: task.metadata?.acceptance ?? {},
+      ...(task.metadata?.modelRequest ? { modelRequest: structuredClone(task.metadata.modelRequest) } : {}),
+      ...(codingRepair ? { execution: codingRepair, mutationScopes: task.metadata?.mutationScopes ?? [] } : {})
     }
   };
 }
