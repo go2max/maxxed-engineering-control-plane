@@ -92,6 +92,7 @@ test('leverage engine prefers exact reuse then transform then retrieval then nov
   assert.equal(engine.plan(base).strategy, LeverageStrategy.NOVEL_REASONING);
   cas.put({ ...base, dependencySlice: { seedIds: [], nodes: [], edges: [] }, environment: null, policyVersion: null }, { ok: true }, { tags: ['coding'] });
   assert.equal(engine.plan(base).strategy, LeverageStrategy.EXACT_REUSE);
+  assert.notEqual(engine.plan({ ...base, exactReuseAllowed: false }).strategy, LeverageStrategy.EXACT_REUSE);
 
   const cas2 = new SolutionCAS(); const transforms2 = new TransformRegistry();
   transforms2.register(replaceTextTransform({ id: 't', from: 'old', to: 'new' }));
@@ -148,14 +149,22 @@ test('speculative planner fans out only when value or novelty justifies it', () 
   assert.equal(planner.plan({ novelty: 0.9, riskClass: 'high', expectedValue: 12, availableSlots: 4, verifierCapacity: 4 }).candidates, 4);
 });
 
-test('runtime adapter short-circuits exact repeated coding work', () => {
+test('runtime adapter refuses exact reuse on mutable HEAD but reuses identical immutable source', () => {
   const runtime = new ControlPlaneRuntime(); const cas = new SolutionCAS(); const graph = new SemanticCodeGraph(); const repairs = new RepairMemory(); const harvester = new TrajectoryHarvester();
   const engine = new LeverageEngine({ cas, graph, transforms: new TransformRegistry(), repairs });
   const adapter = new LeverageRuntimeAdapter({ runtime, engine, cas, harvester, repairs });
+  const repoSha = 'a'.repeat(40);
+
   const task = compileCodingTask({ key: 'repeat-1', repository: 'o/r', repoPath: '/repo', objective: 'same fix' });
-  const spec = { repository: 'o/r', objective: 'same fix', acceptance: task.metadata.acceptance, execution: { baseBranch: 'main', ref: 'HEAD' } };
-  cas.put({ taskClass: task.taskClass, normalizedSpec: spec, dependencySlice: { seedIds: [], nodes: [], edges: [] }, environment: null, policyVersion: '1' }, { artifacts: { commitSha: 'abc' } }, { tags: [task.taskClass] });
-  const prepared = adapter.prepareCodingTask(task);
+  const immutableSpec = { repository: 'o/r', objective: 'same fix', acceptance: task.metadata.acceptance, execution: { baseBranch: 'main', ref: repoSha } };
+  cas.put({ taskClass: task.taskClass, normalizedSpec: immutableSpec, dependencySlice: { seedIds: [], nodes: [], edges: [] }, environment: { repoSha, sourceFingerprint: repoSha }, policyVersion: '1' }, { artifacts: { commitSha: 'abc' } }, { tags: [task.taskClass] });
+
+  const mutable = adapter.prepareCodingTask(task);
+  assert.equal(mutable.reused, false);
+  assert.notEqual(mutable.plan.strategy, LeverageStrategy.EXACT_REUSE);
+
+  const task2 = compileCodingTask({ key: 'repeat-2', repository: 'o/r', repoPath: '/repo', objective: 'same fix', ref: repoSha });
+  const prepared = adapter.prepareCodingTask(task2, { environment: { repoSha } });
   assert.equal(prepared.reused, true);
-  assert.equal(runtime.graph.get('repeat-1').state, 'ACCEPTED');
+  assert.equal(runtime.graph.get('repeat-2').state, 'ACCEPTED');
 });
