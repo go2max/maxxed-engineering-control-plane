@@ -1,85 +1,74 @@
 # Throughput and Leverage Model
 
-## Headline metric
+## Primary metric
 
 `engineering_leverage = accepted_human_equivalent_hours / owner_active_intervention_hours`
 
-This is the primary owner-attention leverage metric. It is not wall-clock speed and is not a claim that AI literally codes hundreds of times faster than a conventional engineer.
+This remains the sustained owner-attention metric for the mixed portfolio. It is not wall-clock speed and is not measured by commits, agents, tokens or lane count.
+
+## Secondary effective-leverage metric
+
+For standardized product-family operations, also measure:
+
+`effective_factory_leverage = accepted_human_equivalent_hours / novel_reasoning_owner_equivalent_hours`
+
+This captures cases where one accepted novel solution is safely reused, transformed or fanned out across many products. It must be reported separately from sustained portfolio leverage.
 
 ## Accepted-output rules
 
-Count only work that satisfies the applicable completion contract. Open PRs, generated code, retries, failed deployments, superseded branches and issue churn do not count.
+Count only artifacts satisfying the applicable acceptance contract. Reverted, duplicate, superseded, unverified, stale-cache and failed-deployment work receives no output credit.
 
-Each accepted unit records:
+Each accepted unit records source SHA, accepted/final SHA, task/product family, acceptance evidence, human-equivalent estimate, methodology version/confidence, reuse/transform lineage, repair/rollback history and accepted timestamp.
 
-- canonical task/issue/work-packet identifier;
-- repository/product family;
-- source and accepted/final SHA;
-- acceptance evidence;
-- human-equivalent estimate low/base/high;
-- estimation methodology version and confidence;
-- rework/repair/rollback history;
-- accepted timestamp.
+## Compounding leverage accounting
 
-## Owner-attention rules
+Track reasoning avoided, not only work produced:
+- exact solution-cache hit rate;
+- deterministic-transform hit rate;
+- retrieval-assisted vs novel-reasoning rate;
+- artifact/test/build cache hit rate;
+- product-family baseline reuse ratio;
+- average dependency-slice size vs repository size;
+- micro-shard coordination overhead;
+- patches accepted per novel solution;
+- repair-memory reuse rate;
+- training/eval improvement by task class.
 
-Owner attention means active intervention or decision time, not elapsed runtime. It may be captured by explicit operator sessions, semantic approval actions or manual correction. Wall-clock waiting must never be substituted for owner attention.
-
-## Supporting KPIs
-
-- autonomous completion rate;
-- first-pass acceptance rate;
-- second-pass acceptance rate;
-- interventions per accepted task/packet;
-- repair-loop success rate;
-- rework and rollback rate;
-- median accepted cycle time;
-- productive concurrent lanes;
-- verification utilization and queue wait;
-- repair utilization and queue wait;
-- queue starvation;
-- human/provider blocked time;
-- merge-ready-to-merge latency;
-- deployment acceptance latency;
-- cost per accepted human-equivalent hour.
+A cache hit counts only if immutable source identity, policy/environment compatibility and acceptance requirements remain valid.
 
 ## Stage checkpoints
 
-These are acceptance checkpoints, not architecture targets.
+### 300x sustained
+Autonomous portfolio scheduling, bounded coding/repair, local compute fabric, independent verification and product-family reuse allow the owner to remain primarily exception-driven.
 
-### 10x
-- 2-4 consistently productive lanes;
-- dependency/claim reliability established;
-- routine manual next-task selection removed.
+### 1,000-3,000x effective
+Semantic slicing, content-addressed solution/artifact caches and routine deterministic transformations eliminate repeated discovery/build/reasoning work.
 
-### 20x
-- 5-8 productive lanes;
-- bounded repair loops;
-- most ordinary work requires no owner intervention.
+### 3,000-15,000x effective
+Known maintenance/migration classes become model-free codemods; product-family delta generation and repair memory dominate standardized work.
 
-### 50x
-- 10-20 mixed implementation/verification/repair lanes;
-- strong backpressure and Work Packet use;
-- standardized product families showing factory leverage.
+### 15,000-50,000x effective
+Most repeated work is reuse/transform/verify; specialist models handle the remaining frequent reasoning classes; outcome harvesting continuously improves routing and repair.
 
-### 100x
-- owner is primarily exception-driven;
-- autonomous completion and verification are high enough that scaling lanes increases accepted throughput rather than review debt;
-- routine portfolio scheduling is autonomous.
+### 50,000-100,000x effective/burst
+Possible only for highly repetitive, product-family or portfolio-wide operations where one novel solution safely produces hundreds or thousands of accepted derivative changes. This is not a general-purpose software-engineering promise.
 
-### 150-300x
-- horizontally scalable scheduler;
-- product factories and shared-platform reuse dominate new product work;
-- owner mainly handles irreversible approvals, strategy and ambiguous product decisions.
+## Micro-lane KPIs
 
-### 500-1000x
-Possible only on highly standardized, low-touch factory work. It is not a blended portfolio planning baseline.
+- shard execution vs decomposition/composition time;
+- accepted shards per second/minute;
+- conflict/rebase rate;
+- stale-base rejection rate;
+- targeted-test escape rate caught by integration tests;
+- average mutation scope size;
+- weak-host utilization;
+- parent cycle-time improvement from sharding.
 
 ## Anti-gaming
 
 - Parent/program trackers create no output credit.
-- Reverted output is removed or discounted by policy.
-- Duplicate or superseded work creates no credit.
-- No credit for validation bypass or incomplete acceptance.
-- Model identity is UNKNOWN unless execution provenance proves it.
-- Historical monthly leverage retains the methodology used at the time; methodology changes create a new version rather than silently rewriting history.
+- Duplicate fan-out is not multiplied unless each derivative artifact is independently accepted and represents real human-equivalent work.
+- Cache reuse against mutable or unproven source identity creates no leverage credit.
+- Validation bypass creates no credit.
+- Speculative candidates count only the accepted result; rejected candidates are compute cost.
+- Historical leverage retains the methodology version used at the time.
