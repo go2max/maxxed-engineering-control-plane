@@ -15,6 +15,7 @@ export class PullRequestPromotion {
     const promoted = [];
     for (const task of this.runtime.graph.list()) {
       if (task.state !== TaskState.ACCEPTED || task.metadata?.execution?.kind !== 'coding-agent') continue;
+      if (task.metadata?.repairOf) continue;
       const artifacts = acceptedArtifacts(task);
       if (!artifacts?.pushed || !artifacts.branchName || !artifacts.commitSha) continue;
       const promotionKey = `pr-promotion:${task.repository}:${artifacts.branchName}:${artifacts.commitSha}`;
