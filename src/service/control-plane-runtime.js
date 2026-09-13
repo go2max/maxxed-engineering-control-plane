@@ -18,6 +18,8 @@ import { restoreRuntime, snapshotRuntime } from '../core/runtime-state.js';
 import { fabricTaskFromDispatch } from '../agents/coding-task.js';
 import { evidenceFromFabricResult } from './fabric-execution-client.js';
 
+const isCodingTask = (task) => task?.metadata?.execution?.kind === 'coding-agent';
+
 export class ControlPlaneRuntime {
   constructor({ workerProvider = async () => [], schedulerOptions = {}, modelDefinitions = [], modelClientFactory = null, fabricExecutionClient = null, throughputOptions = {} } = {}) {
     this.graph = new TaskGraph(); this.claims = new ClaimAuthority(); this.repairs = new RepairController(); this.verifier = new AcceptanceVerifier();
@@ -44,7 +46,7 @@ export class ControlPlaneRuntime {
     return result;
   }
 
-  async dispatch(now = Date.now()) {
+  async dispatch(now = Date.now(), { taskPredicate = () => true } = {}) {
     if (this.paused) return [];
     const workers = await this.workerProvider();
     this.reconcileModels(workers, now);
@@ -57,19 +59,21 @@ export class ControlPlaneRuntime {
     this.lastThroughputDecision = this.throughput.target({ availableCapacity, verifierBacklog, recentAccepted, recentFailed, degraded: !this.readiness().ready });
     const previousLimit = this.scheduler.totalLaneLimit;
     this.scheduler.totalLaneLimit = Math.max(1, this.lastThroughputDecision.allowedConcurrency || 1);
-    const dispatches = this.orchestrator.dispatch(workers, { now });
-    this.scheduler.totalLaneLimit = previousLimit;
-    if (dispatches.length) this.journal.append('dispatch.issued', { tasks: dispatches.map((entry) => entry.taskKey), workers: dispatches.map((entry) => entry.workerId), throughput: this.lastThroughputDecision }, now);
-    return dispatches;
+    try {
+      const dispatches = this.orchestrator.dispatch(workers, { now, taskPredicate });
+      if (dispatches.length) this.journal.append('dispatch.issued', { tasks: dispatches.map((entry) => entry.taskKey), workers: dispatches.map((entry) => entry.workerId), throughput: this.lastThroughputDecision }, now);
+      return dispatches;
+    } finally {
+      this.scheduler.totalLaneLimit = previousLimit;
+    }
   }
 
   async dispatchToFabric(now = Date.now()) {
     if (!this.fabricExecutionClient) throw new Error('fabric execution client is not configured');
-    const dispatches = await this.dispatch(now);
+    const dispatches = await this.dispatch(now, { taskPredicate: isCodingTask });
     const submitted = [];
     for (const dispatch of dispatches) {
       const task = this.graph.get(dispatch.taskKey);
-      if (task?.metadata?.execution?.kind !== 'coding-agent') continue;
       try {
         const fabricTask = fabricTaskFromDispatch(task, dispatch);
         const accepted = await this.fabricExecutionClient.enqueue(fabricTask);
