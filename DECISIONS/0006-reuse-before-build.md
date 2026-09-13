@@ -9,10 +9,26 @@ For every non-trivial engineering mechanism, perform a reuse scan before writing
 The search order is mandatory:
 
 1. **Existing Maxxed code first** — search the current repository, shared SDKs, control-plane/runtime repos, and prior accepted implementations.
-2. **Mature open-source implementations second** — search established GitHub projects that solve the same mechanism in production.
-3. **Build only the missing delta** — prefer adapting a proven algorithm, protocol, data shape, test pattern, or small compatible implementation over creating a parallel framework.
+2. **Top-25 comparative open-source scan second** — inspect at least 25 strong, relevant, production-grade GitHub implementations or mechanism sources whenever that many credible examples exist.
+3. **Synthesize before coding** — extract and deduplicate the strongest invariants, failure handling, admission rules, recovery semantics, observability, and tests across the pool.
+4. **Build only the missing delta** — prefer adapting proven algorithms, protocols, data shapes, test patterns, or small compatible implementations over creating a parallel framework.
 
-The goal is lower engineering effort, less duplicate code, faster validation, and smaller long-term maintenance surface.
+The objective is not to copy the most popular repository. It is to use a large evidence pool to surface edge cases and design questions we may not have identified yet, then build the strongest compatible composite for the Maxxed architecture.
+
+## Top-25 selection and synthesis
+
+For each substantial reusable mechanism, the research record should:
+
+- include at least 25 credible candidates when available;
+- favor mature, maintained systems with real production usage and tests;
+- span multiple implementation families where useful rather than 25 near-identical forks;
+- score or qualitatively compare candidates on correctness, failure recovery, concurrency semantics, operational maturity, maintenance activity, dependency weight, fit with Maxxed invariants, and license compatibility;
+- distinguish directly reusable code from mechanism-only research;
+- capture recurring patterns and important dissenting designs;
+- explicitly identify new failure modes, questions, or acceptance tests discovered during the scan;
+- produce one local design synthesis before implementation begins.
+
+If fewer than 25 credible implementations exist, record the actual pool and why it is smaller. Do not pad the count with low-quality or irrelevant repositories.
 
 ## Adoption gate
 
@@ -46,17 +62,24 @@ A feature is not considered efficiently implemented until the PR states one of:
 
 - `reuse: internal` with the reused Maxxed component;
 - `reuse: external` with upstream provenance/license;
+- `reuse: synthesized-top-25` with the compared candidate pool and extracted mechanisms;
 - `reuse: none` with a short explanation of why no suitable implementation was adopted.
 
 This requirement applies to infrastructure, schedulers, queues, retry/backoff, locking, parsers, adapters, build/release tooling, observability, caching, and other reusable engineering primitives. Product-specific business logic may use a lighter scan when the mechanism is genuinely unique.
 
-## Current #886 examples
+## Current #886 synthesis pool
 
-The portfolio scheduler/recovery work uses these external mechanisms as research inputs rather than importing another queue framework:
+The current orchestration research pool includes 25 mature systems spanning workflow engines, schedulers, queues, and distributed workers: Temporal, Kubernetes client-go, Argo Workflows, Graphile Worker, BullMQ, Agenda, pg-boss, Celery, RQ, Dramatiq, Sidekiq, Faktory, Nomad, Airflow, Dagster, Prefect, Dask Distributed, Ray, Luigi, Cadence, Netflix Conductor, Hatchet, River, Machinery, and Kestra.
 
-- Kubernetes client-go workqueue: per-item exponential retry combined with an overall token-bucket limiter;
-- Graphile Worker: stop accepting new jobs during graceful shutdown while draining/releasing active work;
-- Argo Workflows: durable synchronization/lock ownership rather than stealing ownership solely from stale controller liveness;
-- Temporal activity execution: heartbeat/progress semantics separated from durable attempt ownership/timeouts.
+Recurring mechanisms already adopted or being adapted include:
 
-The canonical implementation remains `maxxed-engineering-control-plane`.
+- dynamic concurrency evaluated at admission/submit time rather than fixed startup-only limits;
+- global safety throttles separated from per-group/per-stage admission limits;
+- saturation/backpressure represented as a transient scheduling condition rather than task failure;
+- durable lease/fencing ownership separated from advisory liveness/heartbeat;
+- per-item retry/backoff separated from global rate/capacity limits;
+- graceful drain that stops new starts while allowing bounded in-flight work to finish;
+- deterministic reconciliation and idempotency rather than blind replay;
+- explicit dead-letter/escalation behavior after bounded retry/repair exhaustion.
+
+The canonical implementation remains `maxxed-engineering-control-plane`; external systems are research inputs unless provenance/license explicitly supports direct reuse.
