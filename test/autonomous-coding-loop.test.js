@@ -5,7 +5,17 @@ import { AutonomousCodingLoop } from '../src/service/autonomous-coding-loop.js';
 import { compileCodingTask } from '../src/agents/coding-task.js';
 
 function worker(id = 'w1', slots = 4) {
-  return { workerId: id, state: 'AVAILABLE', capabilities: ['coding-agent', 'git', 'node'], capacity: { freeSlots: slots, freeMemoryMb: 8192 }, pressure: { cpuPct: 10, memoryPct: 20 }, metadata: { os: 'linux', arch: 'x64' } };
+  return {
+    workerId: id,
+    state: 'AVAILABLE',
+    capabilities: ['coding-agent', 'git', 'node'],
+    capacity: { freeSlots: slots, freeMemoryMb: 8192 },
+    pressure: { cpuPct: 10, memoryPct: 20 },
+    metadata: {
+      os: 'linux', arch: 'x64',
+      localModels: [{ id: `${id}-coder`, endpoint: `http://${id}.local:8080`, capabilities: ['coding'], contextWindow: 32768, maxOutputTokens: 4096 }]
+    }
+  };
 }
 
 test('loop submits coding tasks and leaves non-coding tasks untouched', async () => {
@@ -23,6 +33,26 @@ test('loop submits coding tasks and leaves non-coding tasks untouched', async ()
   assert.equal(result.throughput.desiredConcurrency, 2);
 });
 
+test('dispatchToFabric never claims unrelated executor types', async () => {
+  const enqueued = [];
+  const fabric = { enqueue: async (task) => { enqueued.push(task); return task; }, fleet: async () => ({ tasks: [] }) };
+  const runtime = new ControlPlaneRuntime({ workerProvider: async () => [worker()], fabricExecutionClient: fabric, throughputOptions: { baselineConcurrency: 1, targetMultiplier: 2 } });
+  runtime.ingest(compileCodingTask({ key: 'code-1', repository: 'r1', repoPath: '/repo1', objective: 'one' }));
+  runtime.ingest({ key: 'other', repository: 'r2', objective: 'other executor', state: 'READY' });
+  const submitted = await runtime.dispatchToFabric(1000);
+  assert.equal(submitted.length, 1);
+  assert.equal(enqueued.length, 1);
+  assert.equal(runtime.graph.get('other').state, 'READY');
+});
+
+test('temporary lane limit is restored when scheduler dispatch throws', async () => {
+  const runtime = new ControlPlaneRuntime({ workerProvider: async () => [worker()], throughputOptions: { baselineConcurrency: 1, targetMultiplier: 2 } });
+  runtime.scheduler.totalLaneLimit = 9;
+  runtime.orchestrator.dispatch = () => { throw new Error('synthetic dispatch failure'); };
+  await assert.rejects(() => runtime.dispatch(1000), /synthetic dispatch failure/);
+  assert.equal(runtime.scheduler.totalLaneLimit, 9);
+});
+
 test('fabric success reconciles through acceptance and records branch evidence', async () => {
   let terminal = [];
   const fabric = {
@@ -34,8 +64,6 @@ test('fabric success reconciles through acceptance and records branch evidence',
   const loop = new AutonomousCodingLoop({ runtime, fabricClient: fabric, now: () => 1000 });
   const first = await loop.tick();
   const fabricTask = first.submitted[0];
-  const queued = await fabric.enqueue({});
-  void queued;
   const controlTask = runtime.graph.get('code-1');
   const claimLineage = controlTask.lineage.at(-1).evidence;
   const claim = runtime.claims.list()[0];
