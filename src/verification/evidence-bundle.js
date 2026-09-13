@@ -48,6 +48,7 @@ export function synthesizeRepairTask({ task, verification, evidence = {}, attemp
       failureFingerprint: fingerprint,
       repairPlan: plan,
       restartable: true,
+      closesParentOnAccept: Boolean(codingRepair),
       acceptance: task.metadata?.acceptance ?? {},
       ...(task.metadata?.modelRequest ? { modelRequest: structuredClone(task.metadata.modelRequest) } : {}),
       ...(codingRepair ? { execution: codingRepair, mutationScopes: task.metadata?.mutationScopes ?? [] } : {})
