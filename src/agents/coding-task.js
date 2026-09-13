@@ -4,7 +4,7 @@ function slug(value) {
 
 export function compileCodingTask({
   key, repository, repoPath, objective, acceptance = {}, testCommands = [], dependencies = [],
-  priority = 0, riskClass = 'normal', taskClass = 'standard', ref = 'HEAD', maxSteps = 24,
+  priority = 0, riskClass = 'normal', taskClass = 'standard', ref = 'HEAD', baseBranch = 'main', maxSteps = 24,
   autoCommit = true, autoPush = true, branchPrefix = 'maxxed/agent'
 } = {}) {
   if (!key) throw new Error('coding task key is required');
@@ -38,6 +38,7 @@ export function compileCodingTask({
         kind: 'coding-agent',
         repoPath,
         ref,
+        baseBranch,
         branchBase,
         goal: objective,
         acceptance: normalizedAcceptance,
