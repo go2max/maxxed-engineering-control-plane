@@ -18,6 +18,7 @@ test('compileValidationTask creates exact-SHA model-free validation work', () =>
   assert.deepEqual(task.metadata.acceptance.requiredChecks, ['syntax', 'tests']);
   assert.equal(task.metadata.modelRequest, undefined);
   assert.equal(task.metadata.suppressPromotion, true);
+  assert.ok(task.requirements.capabilities.includes('validation-agent'));
   assert.ok(task.requirements.capabilities.includes('git'));
   assert.ok(task.requirements.capabilities.includes('node'));
   assert.ok(task.requirements.capabilities.includes('npm'));
@@ -69,6 +70,7 @@ test('validation admission permits bounded test runners and read-only git', () =
     ]
   });
   assert.equal(task.metadata.execution.steps.length, 5);
+  assert.ok(task.requirements.capabilities.includes('validation-agent'));
   assert.ok(task.requirements.capabilities.includes('python'));
 });
 
