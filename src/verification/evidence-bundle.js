@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { buildRepairPlan, fingerprintFailure } from './failure-fingerprint.js';
+import { TaskStage } from '../scheduler/task-stage.js';
 
 function canonical(value) {
   if (Array.isArray(value)) return value.map(canonical);
@@ -43,6 +44,7 @@ export function synthesizeRepairTask({ task, verification, evidence = {}, attemp
     dedupeKey: `${task.key}:repair:${fingerprint}`,
     state: 'READY',
     metadata: {
+      stage: TaskStage.REPAIR,
       repairOf: task.key,
       repairAttempt: attempt,
       failureFingerprint: fingerprint,

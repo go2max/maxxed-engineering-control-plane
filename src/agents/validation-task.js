@@ -1,3 +1,5 @@
+import { TaskStage } from '../scheduler/task-stage.js';
+
 const SHA40 = /^[0-9a-f]{40}$/i;
 const MAX_STEPS = 32;
 const SAFE_ENV_KEYS = new Set(['CI', 'NODE_ENV', 'TZ', 'PYTHONUNBUFFERED', 'DOTNET_NOLOGO']);
@@ -87,6 +89,7 @@ export function compileValidationTask({
     dedupeKey: `validation:${repository}:${String(ref).toLowerCase()}:${key}`,
     state: 'READY',
     metadata: {
+      stage: TaskStage.VERIFICATION,
       priority: Number(priority),
       restartable: true,
       suppressPromotion: true,

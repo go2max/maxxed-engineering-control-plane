@@ -1,3 +1,5 @@
+import { TaskStage } from '../scheduler/task-stage.js';
+
 function slug(value) {
   return String(value ?? 'task').toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80) || 'task';
 }
@@ -37,6 +39,7 @@ export function compileCodingTask({
     dedupeKey: `coding:${repository}:${key}`,
     state: 'READY',
     metadata: {
+      stage: TaskStage.IMPLEMENTATION,
       priority,
       restartable: true,
       mutationScopes: [`repo:${repository}`, `branch-base:${repository}:${branchBase}`],
