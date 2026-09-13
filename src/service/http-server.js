@@ -51,7 +51,15 @@ export function createControlPlaneServer({ runtime, adminToken, codingLoop = nul
       if (req.method === 'GET' && url.pathname === '/claims') return send(res, 200, { claims: runtime.claims.list() });
       if (req.method === 'GET' && url.pathname === '/models') return send(res, 200, { models: runtime.status().models });
       if (req.method === 'GET' && url.pathname === '/coding/status') return send(res, 200, { enabled: Boolean(codingLoop), running: Boolean(codingLoop?.running), lastTick: codingLoop?.lastTick ?? null, throughput: runtime.lastThroughputDecision });
-      if (req.method === 'GET' && url.pathname === '/leverage/status') return send(res, 200, leverage ? { ...leverage.status(), graphNodes: leverageComponents.semanticGraph.nodes.size, graphEdges: leverageComponents.semanticGraph.edges.size, transforms: leverageComponents.transforms.manifest(), repairFingerprints: leverageComponents.repairMemory.byFingerprint.size } : { enabled: false });
+      if (req.method === 'GET' && url.pathname === '/leverage/status') return send(res, 200, leverage ? {
+        ...leverage.status(),
+        artifactCache: leverageComponents.artifactCache.entries.size,
+        graphNodes: leverageComponents.semanticGraph.nodes.size,
+        graphEdges: leverageComponents.semanticGraph.edges.size,
+        transforms: leverageComponents.transforms.manifest(),
+        repairFingerprints: leverageComponents.repairMemory.byFingerprint.size,
+        productFamilies: leverageComponents.productFamilies.baselines.size
+      } : { enabled: false });
       if (req.method === 'GET' && url.pathname === '/events') {
         const afterSequence = Number(url.searchParams.get('afterSequence') ?? 0);
         const limit = Number(url.searchParams.get('limit') ?? 200);
@@ -76,6 +84,7 @@ export function createControlPlaneServer({ runtime, adminToken, codingLoop = nul
         if (!codingLoop) return send(res, 503, { error: 'autonomous coding loop is not configured' });
         return send(res, 200, await codingLoop.tick());
       }
+
       if (req.method === 'POST' && url.pathname === '/leverage/plan') {
         if (!leverageComponents) return send(res, 503, { error: 'leverage fabric is not configured' });
         return send(res, 200, leverageComponents.leverageEngine.plan(await readJson(req)));
@@ -94,6 +103,38 @@ export function createControlPlaneServer({ runtime, adminToken, codingLoop = nul
         if (!leverageComponents) return send(res, 503, { error: 'leverage fabric is not configured' });
         const body = await readJson(req); const id = leverageComponents.transforms.register(replaceTextTransform(body));
         return send(res, 201, { id });
+      }
+      if (req.method === 'POST' && url.pathname === '/leverage/transforms/execute') {
+        if (!leverageComponents) return send(res, 503, { error: 'leverage fabric is not configured' });
+        const body = await readJson(req); return send(res, 200, await leverageComponents.transforms.execute(body.id, body.context ?? {}));
+      }
+      if (req.method === 'POST' && url.pathname === '/leverage/artifacts/put') {
+        if (!leverageComponents) return send(res, 503, { error: 'leverage fabric is not configured' });
+        const body = await readJson(req); return send(res, 201, leverageComponents.artifactCache.put(body.input, body.artifact, body.options ?? {}));
+      }
+      if (req.method === 'POST' && url.pathname === '/leverage/artifacts/get') {
+        if (!leverageComponents) return send(res, 503, { error: 'leverage fabric is not configured' });
+        const body = await readJson(req); return send(res, 200, { hit: leverageComponents.artifactCache.get(body.input) });
+      }
+      if (req.method === 'POST' && url.pathname === '/leverage/product-families/register') {
+        if (!leverageComponents) return send(res, 503, { error: 'leverage fabric is not configured' });
+        return send(res, 201, leverageComponents.productFamilies.registerBaseline(await readJson(req)));
+      }
+      if (req.method === 'POST' && url.pathname === '/leverage/product-families/plan') {
+        if (!leverageComponents) return send(res, 503, { error: 'leverage fabric is not configured' });
+        return send(res, 200, leverageComponents.productFamilies.plan(await readJson(req)));
+      }
+      if (req.method === 'POST' && url.pathname === '/leverage/maintenance/plan') {
+        if (!leverageComponents) return send(res, 503, { error: 'leverage fabric is not configured' });
+        return send(res, 200, leverageComponents.maintenancePlanner.plan(await readJson(req)));
+      }
+      if (req.method === 'POST' && url.pathname === '/leverage/bottleneck') {
+        if (!leverageComponents) return send(res, 503, { error: 'leverage fabric is not configured' });
+        return send(res, 200, leverageComponents.bottleneckOptimizer.analyze(await readJson(req)));
+      }
+      if (req.method === 'POST' && url.pathname === '/leverage/replay') {
+        if (!leverageComponents) return send(res, 503, { error: 'leverage fabric is not configured' });
+        const body = await readJson(req); return send(res, 200, leverageComponents.replayProjector.replay(body.events ?? runtime.journal.list({ limit: 10000 }), body.seed ?? {}));
       }
       if (req.method === 'POST' && url.pathname === '/dispatch') return send(res, 200, { dispatches: await runtime.dispatch() });
       if (req.method === 'POST' && url.pathname === '/results') {
