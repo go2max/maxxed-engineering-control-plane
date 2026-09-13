@@ -1,5 +1,5 @@
 import { TaskState } from '../core/task-graph.js';
-import { fabricTaskFromDispatch } from '../agents/coding-task.js';
+import { fabricTaskFromDispatch, isFabricExecutionTask } from '../agents/fabric-task.js';
 
 const isCodingTask = (task) => task?.metadata?.execution?.kind === 'coding-agent';
 
@@ -46,21 +46,22 @@ export class AutonomousCodingLoop {
     for (const row of reconciled) {
       const task = this.runtime.graph.get(row.taskKey);
       if (task) {
+        const coding = isCodingTask(task);
         if (row.action === 'ACCEPT') {
           const bundle = acceptedBundle(task);
           if (bundle) {
-            if (this.leverage) harvested.push(this.leverage.recordAccepted(task, bundle, { now }));
+            if (coding && this.leverage) harvested.push(this.leverage.recordAccepted(task, bundle, { now }));
             this.#recordWorkerOutcome(task, bundle, true, null, now);
           }
         } else if (row.action) {
-          if (this.leverage) harvested.push(this.leverage.recordOutcome(task, row.action, { fabricTaskId: row.fabricTaskId ?? null, branchName: row.branchName ?? null, commitSha: row.commitSha ?? null }));
+          if (coding && this.leverage) harvested.push(this.leverage.recordOutcome(task, row.action, { fabricTaskId: row.fabricTaskId ?? null, branchName: row.branchName ?? null, commitSha: row.commitSha ?? null }));
           const bundle = acceptedBundle(task);
           this.#recordWorkerOutcome(task, bundle, false, row.action, now);
         }
       }
       if (row.parentTaskKey && row.parentState === TaskState.ACCEPTED) {
         const parent = this.runtime.graph.get(row.parentTaskKey); const bundle = acceptedBundle(parent);
-        if (parent && bundle && this.leverage) harvested.push(this.leverage.recordAccepted(parent, bundle, { now }));
+        if (parent && isCodingTask(parent) && bundle && this.leverage) harvested.push(this.leverage.recordAccepted(parent, bundle, { now }));
       }
     }
     return harvested.filter(Boolean);
@@ -107,7 +108,7 @@ export class AutonomousCodingLoop {
       const previousLimit = this.runtime.scheduler.totalLaneLimit;
       let dispatches;
       this.runtime.scheduler.totalLaneLimit = Math.max(1, throughput.allowedConcurrency || 1);
-      try { dispatches = this.runtime.orchestrator.dispatch(workers, { now, taskPredicate: isCodingTask }); }
+      try { dispatches = this.runtime.orchestrator.dispatch(workers, { now, taskPredicate: isFabricExecutionTask }); }
       finally { this.runtime.scheduler.totalLaneLimit = previousLimit; }
 
       const submitted = [];
@@ -115,12 +116,13 @@ export class AutonomousCodingLoop {
         const task = this.runtime.graph.get(dispatch.taskKey);
         try {
           const accepted = await this.fabric.enqueue(fabricTaskFromDispatch(task, dispatch));
-          submitted.push({ taskKey: task.key, workerId: dispatch.workerId, fabricTaskId: accepted.taskId });
-          this.runtime.journal.append('coding.task.submitted', { taskKey: task.key, workerId: dispatch.workerId, fabricTaskId: accepted.taskId }, now);
+          const kind = task.metadata?.execution?.kind ?? 'unknown';
+          submitted.push({ taskKey: task.key, workerId: dispatch.workerId, fabricTaskId: accepted.taskId, kind });
+          this.runtime.journal.append('fabric.task.submitted', { taskKey: task.key, workerId: dispatch.workerId, fabricTaskId: accepted.taskId, kind }, now);
         } catch (error) {
           this.runtime.claims.release(dispatch.claim);
           this.runtime.graph.setState(task.key, TaskState.READY, { reason: 'fabric submission failed', error: error.message });
-          this.runtime.journal.append('coding.task.submit-failed', { taskKey: task.key, error: error.message }, now);
+          this.runtime.journal.append('fabric.task.submit-failed', { taskKey: task.key, error: error.message, kind: task.metadata?.execution?.kind ?? 'unknown' }, now);
         }
       }
       this.lastTick = { at: now, reconciled, harvested, promoted, submitted, throughput, patch: { reconciliation: patchReconciliation, materialized: materializedShards } };
