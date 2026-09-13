@@ -1,7 +1,7 @@
 import { criticalPathScore, portfolioFairnessPenalty } from './critical-path.js';
 import { rebalanceRecommendations } from './scheduler-policy.js';
 import { buildDispatchAudit, workerSuitability } from './dispatch-audit.js';
-import { stageAllowed, taskStage } from './task-stage.js';
+import { TaskStage, stageAllowed, taskStage } from './task-stage.js';
 import { packetBlockedByActiveClaim, workPacketView } from './work-packet-adapter.js';
 
 function requirementMatch(worker, task) {
@@ -82,6 +82,10 @@ export class PortfolioScheduler {
         policyBackpressure.push({ taskKey: task.key, repository: task.repository, reason: 'work-packet-active', stage, packetKey: packet.packetKey });
         return [];
       }
+      if (stage === TaskStage.DEPLOYMENT && activeClaims.some((claim) => claim.stage === TaskStage.DEPLOYMENT)) {
+        policyBackpressure.push({ taskKey: task.key, repository: task.repository, reason: 'deployment-serialized', stage });
+        return [];
+      }
       if (!stageAllowed(task, admissionDecision)) {
         policyBackpressure.push({ taskKey: task.key, repository: task.repository, reason: 'stage-admission-closed', stage, blockedStages: [...(admissionDecision.blockedStages ?? [])] });
         return [];
@@ -101,6 +105,10 @@ export class PortfolioScheduler {
       const repo = task.repository ?? '__unscoped__';
       if (dispatches.length >= remainingLaneBudget) {
         backpressure.push({ taskKey: task.key, reason: 'global-lane-capacity', stage, adaptiveLimit, activeClaims: activeClaims.length });
+        continue;
+      }
+      if (stage === TaskStage.DEPLOYMENT && activeClaims.some((claim) => claim.stage === TaskStage.DEPLOYMENT && claim.taskKey !== task.key)) {
+        backpressure.push({ taskKey: task.key, reason: 'deployment-serialized', stage });
         continue;
       }
       if (packet.packetKey && activeClaims.some((claim) => claim.packetKey === packet.packetKey && claim.taskKey !== task.key)) {
@@ -130,7 +138,7 @@ export class PortfolioScheduler {
       const worker = selected.worker;
       workerSlots.set(worker.workerId, workerSlots.get(worker.workerId) - 1);
       repoUsage.set(repo, (repoUsage.get(repo) ?? 0) + 1);
-      activeClaims = [...activeClaims, { taskKey: task.key, repository: task.repository, product: task.product, workerId: worker.workerId, packetKey: packet.packetKey }];
+      activeClaims = [...activeClaims, { taskKey: task.key, repository: task.repository, product: task.product, workerId: worker.workerId, packetKey: packet.packetKey, stage }];
       dispatches.push({
         taskKey: task.key,
         repository: task.repository,
