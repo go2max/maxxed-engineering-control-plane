@@ -71,18 +71,24 @@ export class ControlPlaneRuntime {
     }
   }
 
-  operatorCommand(command = {}, now = Date.now()) {
-    const { action, input = {} } = command; let result;
-    switch (action) {
-      case 'pause-dispatch': result = this.pause(); break; case 'resume-dispatch': result = this.resume(); break;
-      case 'set-repository-lane-limit': if (!input.repository || !Number.isInteger(input.limit) || input.limit < 0 || input.limit > 64) throw new Error('repository and integer limit 0..64 are required'); this.scheduler.repoLaneLimits[input.repository] = input.limit; result = this.status(); break;
-      case 'freeze-repository': this.policy.freezeRepository(input.repository, input.reason); result = this.status(); break; case 'thaw-repository': this.policy.thawRepository(input.repository); result = this.status(); break;
-      case 'drain-repository': this.policy.drainRepository(input.repository, input.reason); result = this.status(); break; case 'resume-repository': this.policy.resumeRepository(input.repository); result = this.status(); break;
-      case 'set-priority-override': this.policy.setPriorityOverride(input); result = this.status(); break; case 'clear-priority-override': this.policy.clearPriorityOverride(input.taskKey); result = this.status(); break;
-      case 'recover-expired': result = { expired: this.recoverExpired(now) }; break; case 'resolve-verification-gate': result = this.resolveVerificationGate(input, now); break;
-      default: throw new Error(`unsupported operator command: ${action}`);
-    }
-    this.journal.append('operator.command', { action, input }, now); return result;
+  operatorCommand(command = {}, { commandId = null, now = Date.now() } = {}) {
+    const { action, input = {} } = command;
+    const effectiveCommandId = commandId ?? command.commandId ?? null;
+    const request = { action, input };
+    return this.journal.once(effectiveCommandId, request, () => {
+      let result;
+      switch (action) {
+        case 'pause-dispatch': result = this.pause(); break; case 'resume-dispatch': result = this.resume(); break;
+        case 'set-repository-lane-limit': if (!input.repository || !Number.isInteger(input.limit) || input.limit < 0 || input.limit > 64) throw new Error('repository and integer limit 0..64 are required'); this.scheduler.repoLaneLimits[input.repository] = input.limit; result = this.status(); break;
+        case 'freeze-repository': this.policy.freezeRepository(input.repository, input.reason); result = this.status(); break; case 'thaw-repository': this.policy.thawRepository(input.repository); result = this.status(); break;
+        case 'drain-repository': this.policy.drainRepository(input.repository, input.reason); result = this.status(); break; case 'resume-repository': this.policy.resumeRepository(input.repository); result = this.status(); break;
+        case 'set-priority-override': this.policy.setPriorityOverride(input); result = this.status(); break; case 'clear-priority-override': this.policy.clearPriorityOverride(input.taskKey); result = this.status(); break;
+        case 'recover-expired': result = { expired: this.recoverExpired(now) }; break; case 'resolve-verification-gate': result = this.resolveVerificationGate(input, now); break;
+        default: throw new Error(`unsupported operator command: ${action}`);
+      }
+      this.journal.append('operator.command', { commandId: effectiveCommandId, action, input }, now);
+      return result;
+    });
   }
 
   readiness() {
