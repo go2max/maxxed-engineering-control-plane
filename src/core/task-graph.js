@@ -91,6 +91,7 @@ export class TaskGraph {
     for (const blocker of task.blockers) reasons.push(`blocker:${blocker}`);
     for (const gate of task.humanGates) reasons.push(`human gate:${gate}`);
     if ([TaskState.ACCEPTED, TaskState.CANCELLED].includes(task.state)) reasons.push(`terminal state:${task.state}`);
+    if ([TaskState.BLOCKED, TaskState.FAILED].includes(task.state)) reasons.push(`non-executable state:${task.state}`);
     if (task.state === TaskState.CLAIMED) reasons.push('already claimed');
     return reasons;
   }
