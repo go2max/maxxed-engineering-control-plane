@@ -49,6 +49,7 @@ export function synthesizeRepairTask({ task, verification, evidence = {}, attemp
       repairPlan: plan,
       restartable: true,
       acceptance: task.metadata?.acceptance ?? {},
+      ...(task.metadata?.modelRequest ? { modelRequest: structuredClone(task.metadata.modelRequest) } : {}),
       ...(codingRepair ? { execution: codingRepair, mutationScopes: task.metadata?.mutationScopes ?? [] } : {})
     }
   };
