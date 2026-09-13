@@ -72,7 +72,7 @@ test('explicit disjoint mutation scopes unlock safe same-repository parallelism'
   const orchestrator = new EngineeringOrchestrator({ graph, scheduler, claims, verifier: new AcceptanceVerifier(), repairs: new RepairController() });
   const dispatches = orchestrator.dispatch([worker('w1'), worker('w2')], { now: 100 });
   assert.equal(dispatches.length, 2);
-  assert.deepEqual(claims.list().map((claim) => claim.scopes).sort(), [['repo:repo:src/a'], ['repo:repo:src/b']]);
+  assert.deepEqual(claims.list(100).map((claim) => claim.scopes).sort(), [['repo:repo:src/a'], ['repo:repo:src/b']]);
 });
 
 test('tasks without explicit mutation scopes retain whole-repository fail-safe locking', () => {
@@ -84,7 +84,7 @@ test('tasks without explicit mutation scopes retain whole-repository fail-safe l
   const orchestrator = new EngineeringOrchestrator({ graph, scheduler, claims, verifier: new AcceptanceVerifier(), repairs: new RepairController() });
   const dispatches = orchestrator.dispatch([worker('w1'), worker('w2')], { now: 100 });
   assert.equal(dispatches.length, 1);
-  assert.deepEqual(claims.list()[0].scopes, ['repo:repo']);
+  assert.deepEqual(claims.list(100)[0].scopes, ['repo:repo']);
 });
 
 test('deployment work is globally serialized while non-deployment lanes remain independent', () => {
