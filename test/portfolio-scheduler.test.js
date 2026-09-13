@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { TaskGraph, TaskState } from '../src/core/task-graph.js';
-import { PortfolioScheduler, scoreTask } from '../src/scheduler/portfolio-scheduler.js';
+import { PortfolioScheduler, scoreTask, adaptiveLaneCapacity } from '../src/scheduler/portfolio-scheduler.js';
 
-function worker(workerId, capabilities, freeSlots = 1, cpuPct = 0) {
-  return { workerId, capabilities, capacity: { freeSlots, freeMemoryMb: 8192 }, pressure: { cpuPct }, metadata: { os: 'linux', arch: 'x64' } };
+function worker(workerId, capabilities, freeSlots = 1, cpuPct = 0, memoryPct = 0) {
+  return { workerId, capabilities, capacity: { freeSlots, freeMemoryMb: 8192 }, pressure: { cpuPct, memoryPct }, metadata: { os: 'linux', arch: 'x64' } };
 }
 
 test('scheduler prioritizes dependency unlock leverage and obeys repository lane caps', () => {
@@ -38,4 +38,29 @@ test('starvation contributes deterministic score and accepted dependencies unloc
   const scored = scoreTask(graph, task, { now: 60 * 60_000, starvationMs: 30 * 60_000 });
   assert.equal(scored.starvationSteps, 2);
   assert.equal(graph.frontier().some((candidate) => candidate.key === 'waiting'), true);
+});
+
+test('memory pressure contracts adaptive lane capacity', () => {
+  assert.equal(adaptiveLaneCapacity([worker('w1', [], 4, 10, 96)], 16), 0);
+  assert.equal(adaptiveLaneCapacity([worker('w1', [], 4, 10, 80)], 16), 2);
+});
+
+test('preferred worker affinity wins among otherwise eligible workers', () => {
+  const graph = new TaskGraph();
+  graph.add({ key: 'affinity', repository: 'a', requirements: { preferredWorkerIds: ['w2'] } });
+  const scheduler = new PortfolioScheduler({ graph, repoLaneLimit: 2, totalLaneLimit: 4 });
+  const report = scheduler.planWithReport([worker('w1', [], 2), worker('w2', [], 1)], { now: 100 });
+  assert.equal(report.dispatches[0].workerId, 'w2');
+  assert.equal(report.dispatches[0].explanation.workerSuitability.affinity, 1);
+});
+
+test('dispatch audit is deterministic for an identical scheduling snapshot', () => {
+  const graph = new TaskGraph();
+  graph.add({ key: 't1', repository: 'a' });
+  const scheduler = new PortfolioScheduler({ graph, repoLaneLimit: 2, totalLaneLimit: 4 });
+  const workers = [worker('w1', [], 1)];
+  const first = scheduler.planWithReport(workers, { now: 1234 });
+  const second = scheduler.planWithReport(workers, { now: 1234 });
+  assert.equal(first.audit.decisionId, second.audit.decisionId);
+  assert.equal(first.audit.dispatches[0].taskKey, 't1');
 });
