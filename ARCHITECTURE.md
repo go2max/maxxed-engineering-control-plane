@@ -2,58 +2,61 @@
 
 ## Logical flow
 
-`Planning repository -> portfolio graph -> eligibility engine -> priority scorer -> capacity broker -> execution lanes -> verification lanes -> repair lanes -> acceptance gate -> merge/release authority -> production verification -> telemetry -> scheduler feedback`
+`Planning authority -> portfolio graph -> leverage engine -> decomposition/mutation-scope planner -> eligibility/priority -> capacity broker -> task or micro-lanes -> isolated execution -> verification -> repair/reconciliation -> patch composition -> acceptance -> PR/release -> production verification -> telemetry/outcome harvest -> cache/training/scheduler feedback`
 
-Maxxed Admin is the protected operator surface over this loop. It does not become a second execution source of truth.
+Maxxed Admin is the protected operator surface over this loop. It never becomes a second execution authority.
 
 ## Major components
 
 ### 1. Planning authority
-Versioned architecture intent, roadmap milestones, ADRs, budget/capacity policy, leverage targets and cross-repo dependencies live in this repository and are projected into Admin by exact source SHA.
+Versioned architecture intent, roadmap milestones, ADRs, budget/capacity policy, leverage targets and cross-repo dependencies are projected into Admin by exact source SHA.
 
-### 2. Portfolio graph
-Normalizes repositories, products, issues, Work Packets, dependencies, blockers, risk and owner policy into a dependency-aware graph. It computes executable frontier, blocked frontier, critical path and dependency-unlock value.
+### 2. Portfolio and semantic graphs
+The portfolio graph models products, repositories, dependencies, blockers, risk and critical path. The semantic code graph models files, symbols, imports/references/calls/tests and product-family relationships so tasks receive a bounded dependency slice instead of rediscovering entire repositories.
 
-### 3. Eligibility engine
-Determines whether work may be claimed. Dependency completeness, stale-state checks, human/provider gates, WIP policy, risk policy and environment readiness are authoritative. Priority never overrides eligibility.
+### 3. Leverage engine
+Before allocating reasoning capacity, classify work in this order:
+1. exact content-addressed reuse;
+2. deterministic transform/codemod;
+3. retrieval-assisted execution using accepted solutions or repair memory;
+4. novel model reasoning.
 
-### 4. Priority scorer
-Ranks only eligible work using configurable evidence such as business priority, launch proximity, dependency unlocks, revenue/valuation contribution, age, product-factory leverage, risk and estimated effort.
+Exact reuse requires immutable source identity plus compatible task, policy and environment fingerprints. Cache entries never override acceptance or source truth.
 
-### 5. Capacity broker
-Matches work to available lanes using repository/tool/platform requirements, CPU/RAM/disk, worker/model capability, current WIP, expected duration and verification/repair capacity.
+### 4. Eligibility, priority and capacity
+Eligibility remains authoritative. Priority ranks only eligible work. The capacity broker accounts for CPU/RAM/disk, worker/model capability, host pressure, mutation scopes, expected duration, verification capacity, repair backlog and speculative-work budget.
+
+### 5. Decomposition and Patch Fabric
+Large work may be decomposed into micro-shards at file/symbol/component/package scope when the expected execution-time savings exceed decomposition, transfer, composition and verification cost. Each shard is bound to an immutable base SHA, non-overlapping mutation scopes and a bounded acceptance contract. See `docs/PATCH_FABRIC.md`.
 
 ### 6. Execution fabric
-Each mutation runs in an isolated workspace/worktree/container or equivalent bounded environment. Claims, leases, fencing tokens and scope locks prevent conflicting writers.
+Mutations execute in isolated worktrees/workspaces. Coding workers are bounded to workspace reads/writes and approved verification commands. Deterministic transforms may use model-free precomputed writes. Claims, leases, generations/fencing and resource locks prevent stale or conflicting writers.
 
-### 7. Role-separated agents
-Planning, implementation, verification, repair and release roles have distinct authority. Important work is not self-certified by the same execution step that created it.
+### 7. Verification and repair
+Implementation never self-certifies. Targeted shard checks precede composition; composed branches receive broader integration verification. Failures are fingerprinted, repair memory is consulted, bounded repair tasks are generated, and uncertain external state requires reconciliation.
 
-### 8. Verification fabric
-Deterministic acceptance contracts cover build, lint, tests, security, packaging, artifact integrity, browser/device checks where relevant, and product-specific completion evidence.
+### 8. Safe composition and promotion
+Workers return evidence-rich task branches or patch bundles, not direct `main` writes. A composer verifies base hashes, mutation scopes, conflicts and acceptance evidence before producing one integration branch/PR. Repository policy remains the final merge authority.
 
-### 9. Repair controller
-Failures are classified and routed through bounded repair loops. Deterministic/non-retryable failures stop immediately. Repair changes are reverified from the relevant acceptance boundary.
+### 9. Product-family factory
+Shared foundations are versioned once. New products and broad changes are expressed as product-specific deltas. Portfolio maintenance can fan a known deterministic transform across many repositories in bounded batches.
 
-### 10. Merge/release authority
-Existing canonical safety and approval policies remain authoritative. Production deployment stays serialized unless a later explicit architecture decision changes that rule.
+### 10. Outcome-learning loop
+Accepted and rejected trajectories, repair results, model outcomes and artifacts are sanitized and retained. They feed solution CAS, repair memory, held-out evals and future specialist training. Training data never becomes acceptance authority.
 
-### 11. Telemetry and economics
-Accepted-output facts, intervention facts, lane utilization, queue wait, rework, repair success, cost/capacity and bottlenecks are aggregated incrementally and fed back into scheduling and Admin.
-
-## Scalability rule
-
-No core contract may assume one host, one model vendor, four workers, one verifier, one repository, one queue or manual lane feeding. Concurrency is policy- and capacity-driven.
+### 11. Replay and fail-safe operations
+Durable event history reconstructs task/claim/acceptance projections. No individual host, runner, model, provider or Admin instance is required for safe progress. Loss of capability contracts available work rather than corrupting authority.
 
 ## Backpressure
 
-Implementation starts must be constrained by downstream capacity. If verification or repair becomes congested, scheduler capacity for new implementation contracts automatically. More implementation throughput is not considered progress if accepted throughput does not increase.
+New reasoning/implementation starts contract when verification, composition, repair, merge or production-verification queues saturate. Micro-sharding is disabled when coordination overhead exceeds predicted savings. Speculative fan-out is budgeted by available capacity and verifier headroom.
 
 ## Source-of-truth hierarchy
 
-1. Product repository + canonical issue/PR/release evidence for implementation truth.
-2. Execution ledger for active claim/lease/attempt truth.
-3. Planning repository for strategic intent.
-4. Admin as a derived operator projection and semantic-action surface.
+1. Product repository + accepted SHA/PR/release evidence for implementation truth.
+2. Claim/fencing/event ledger for execution authority.
+3. Planning repository for strategic intent and policy.
+4. Admin as derived projection and bounded-control surface.
+5. Solution/artifact caches, semantic indexes and training corpora as disposable/rebuildable acceleration layers.
 
-Conflicts are surfaced explicitly; no layer silently overwrites another.
+Conflicts are surfaced explicitly; no optimization layer silently overwrites an authoritative layer.
