@@ -70,7 +70,8 @@ export class MicroShardCoordinator {
       const baseSha = String(execution.ref ?? '').toLowerCase();
       if (!SHA40.test(baseSha)) continue;
       if (execution.microSharding?.disabled === true) continue;
-      const units = explicitUnits(execution).length ? explicitUnits(execution) : automaticUnits(execution);
+      const explicit = explicitUnits(execution);
+      const units = explicit.length ? explicit : automaticUnits(execution);
       if (units.length < 2) continue;
       const plan = this.shardPlanner.plan({
         parentTaskKey: parent.key,
@@ -107,6 +108,7 @@ export class MicroShardCoordinator {
       for (const shard of plan.shards) {
         const precomputedWrites = flattenShardWrites(shard);
         const testCommands = shardChecks(parent, shard);
+        const shardTransformId = precomputedWrites.length ? (shard.payloads.find((payload) => payload?.transformId)?.transformId ?? execution.transformId ?? null) : undefined;
         const child = {
           key: shard.shardKey,
           repository: parent.repository,
@@ -139,7 +141,8 @@ export class MicroShardCoordinator {
               autoPush: false,
               taskKey: shard.shardKey,
               microSharding: { disabled: true },
-              ...(precomputedWrites.length ? { precomputedWrites, transformId: shard.payloads.find((payload) => payload?.transformId)?.transformId ?? execution.transformId ?? null } : {}),
+              precomputedWrites: precomputedWrites.length ? precomputedWrites : undefined,
+              transformId: shardTransformId,
               patchBundle: {
                 enabled: true,
                 parentTaskKey: parent.key,
