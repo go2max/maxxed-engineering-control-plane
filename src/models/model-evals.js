@@ -15,7 +15,14 @@ export function modelManifestDigest(manifest) {
 function newRecord(modelId, taskClass, now, dimensions = {}) {
   return { modelId, taskClass, repository: dimensions.repository ?? null, language: dimensions.language ?? null, runs: 0, accepted: 0, failed: 0, totalLatencyMs: 0, measuredLatencyRuns: 0, totalCostUnits: 0, measuredCostRuns: 0, totalTokens: 0, lastFailureClass: null, updatedAt: now };
 }
+function normalizeRecord(current) {
+  current.runs = Number(current.runs ?? 0); current.accepted = Number(current.accepted ?? 0); current.failed = Number(current.failed ?? 0);
+  current.totalLatencyMs = Number(current.totalLatencyMs ?? 0); current.measuredLatencyRuns = Number(current.measuredLatencyRuns ?? 0);
+  current.totalCostUnits = Number(current.totalCostUnits ?? 0); current.measuredCostRuns = Number(current.measuredCostRuns ?? 0); current.totalTokens = Number(current.totalTokens ?? 0);
+  return current;
+}
 function updateRecord(current, { accepted, latencyMs, tokens, costUnits, failureClass }, now) {
+  normalizeRecord(current);
   current.runs += 1; accepted ? current.accepted += 1 : current.failed += 1;
   if (Number.isFinite(latencyMs)) { current.totalLatencyMs += Number(latencyMs); current.measuredLatencyRuns += 1; }
   if (Number.isFinite(costUnits)) { current.totalCostUnits += Number(costUnits); current.measuredCostRuns += 1; }
@@ -25,7 +32,8 @@ function updateRecord(current, { accepted, latencyMs, tokens, costUnits, failure
 }
 function computed(record, fallback) {
   if (!record) return fallback;
-  return { ...structuredClone(record), acceptanceRate: record.runs ? record.accepted / record.runs : null, averageLatencyMs: record.measuredLatencyRuns ? record.totalLatencyMs / record.measuredLatencyRuns : null, averageCostUnits: record.measuredCostRuns ? record.totalCostUnits / record.measuredCostRuns : null, averageTokens: record.runs ? record.totalTokens / record.runs : null };
+  const normalized = normalizeRecord(structuredClone(record));
+  return { ...normalized, acceptanceRate: normalized.runs ? normalized.accepted / normalized.runs : null, averageLatencyMs: normalized.measuredLatencyRuns ? normalized.totalLatencyMs / normalized.measuredLatencyRuns : null, averageCostUnits: normalized.measuredCostRuns ? normalized.totalCostUnits / normalized.measuredCostRuns : null, averageTokens: normalized.runs ? normalized.totalTokens / normalized.runs : null };
 }
 function dimensionKey(modelId, taskClass, repository, language) { return `${modelId}:${taskClass}:${repository ?? '*'}:${language ?? '*'}`; }
 
@@ -83,8 +91,8 @@ export class ModelEvalLedger {
 
   restore(snapshot) {
     if (!snapshot || ![1, 2].includes(snapshot.version)) throw new Error('unsupported model eval snapshot');
-    this.#records = new Map((snapshot.records ?? []).map(([key, value]) => [key, structuredClone(value)]));
-    this.#dimensions = new Map((snapshot.dimensions ?? []).map(([key, value]) => [key, structuredClone(value)]));
+    this.#records = new Map((snapshot.records ?? []).map(([key, value]) => [key, normalizeRecord(structuredClone(value))]));
+    this.#dimensions = new Map((snapshot.dimensions ?? []).map(([key, value]) => [key, normalizeRecord(structuredClone(value))]));
   }
 
   list() { return [...this.#records.values()].map((record) => structuredClone(record)); }
