@@ -33,12 +33,8 @@ export class SchedulerPolicy {
 
   evaluate(task, now = Date.now()) {
     const repo = task.repository ?? null;
-    if (repo && this.frozenRepositories.has(repo)) {
-      return { allowed: false, reason: 'repository-frozen', priorityAdjustment: 0 };
-    }
-    if (repo && this.drainingRepositories.has(repo)) {
-      return { allowed: false, reason: 'repository-draining', priorityAdjustment: 0 };
-    }
+    if (repo && this.frozenRepositories.has(repo)) return { allowed: false, reason: 'repository-frozen', priorityAdjustment: 0 };
+    if (repo && this.drainingRepositories.has(repo)) return { allowed: false, reason: 'repository-draining', priorityAdjustment: 0 };
 
     let priorityAdjustment = 0;
     let deadlineUrgency = 0;
@@ -58,12 +54,32 @@ export class SchedulerPolicy {
       else priorityAdjustment += override.adjustment;
     }
 
+    return { allowed: true, reason: null, priorityAdjustment, deadlineUrgency, override: this.priorityOverrides.get(task.key) ?? null };
+  }
+
+  snapshot() {
     return {
-      allowed: true,
-      reason: null,
-      priorityAdjustment,
-      deadlineUrgency,
-      override: this.priorityOverrides.get(task.key) ?? null
+      version: 1,
+      maxPriorityAdjustment: this.maxPriorityAdjustment,
+      frozenRepositories: [...this.frozenRepositories.entries()],
+      drainingRepositories: [...this.drainingRepositories.entries()],
+      priorityOverrides: [...this.priorityOverrides.entries()]
+    };
+  }
+
+  restore(snapshot) {
+    if (!snapshot || snapshot.version !== 1) throw new Error('unsupported scheduler policy snapshot');
+    this.maxPriorityAdjustment = Number(snapshot.maxPriorityAdjustment ?? this.maxPriorityAdjustment);
+    this.frozenRepositories = new Map(snapshot.frozenRepositories ?? []);
+    this.drainingRepositories = new Map(snapshot.drainingRepositories ?? []);
+    this.priorityOverrides = new Map(snapshot.priorityOverrides ?? []);
+  }
+
+  status() {
+    return {
+      frozenRepositories: [...this.frozenRepositories.entries()].map(([repository, value]) => ({ repository, ...value })),
+      drainingRepositories: [...this.drainingRepositories.entries()].map(([repository, value]) => ({ repository, ...value })),
+      priorityOverrides: [...this.priorityOverrides.entries()].map(([taskKey, value]) => ({ taskKey, ...value }))
     };
   }
 }
@@ -78,14 +94,8 @@ export function rebalanceRecommendations({ workers = [], activeClaims = [], back
   }
   const maxRepo = [...repoCounts.entries()].sort((a, b) => b[1] - a[1])[0] ?? null;
   const recommendations = [];
-  if (freeSlots > 0 && backpressure.some((item) => item.reason === 'repository-wip-limit')) {
-    recommendations.push({ action: 'redistribute-free-capacity', freeSlots });
-  }
-  if (maxRepo && activeClaims.length >= 4 && maxRepo[1] / activeClaims.length > 0.6) {
-    recommendations.push({ action: 'reduce-repository-concentration', repository: maxRepo[0], share: maxRepo[1] / activeClaims.length });
-  }
-  if (freeSlots === 0 && backpressure.some((item) => item.reason === 'global-lane-capacity')) {
-    recommendations.push({ action: 'capacity-saturated' });
-  }
+  if (freeSlots > 0 && backpressure.some((item) => item.reason === 'repository-wip-limit')) recommendations.push({ action: 'redistribute-free-capacity', freeSlots });
+  if (maxRepo && activeClaims.length >= 4 && maxRepo[1] / activeClaims.length > 0.6) recommendations.push({ action: 'reduce-repository-concentration', repository: maxRepo[0], share: maxRepo[1] / activeClaims.length });
+  if (freeSlots === 0 && backpressure.some((item) => item.reason === 'global-lane-capacity')) recommendations.push({ action: 'capacity-saturated' });
   return recommendations;
 }
