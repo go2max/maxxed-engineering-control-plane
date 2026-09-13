@@ -34,9 +34,12 @@ export function createControlPlaneServer({ runtime, adminToken }) {
       if (req.method === 'POST' && url.pathname === '/tasks') return send(res, 201, runtime.ingest(await readJson(req)));
       if (req.method === 'POST' && url.pathname === '/dispatch') return send(res, 200, { dispatches: await runtime.dispatch() });
       if (req.method === 'POST' && url.pathname === '/results') return send(res, 200, runtime.complete(await readJson(req)));
-      if (req.method === 'POST' && url.pathname === '/operator/pause') return send(res, 200, runtime.pause());
-      if (req.method === 'POST' && url.pathname === '/operator/resume') return send(res, 200, runtime.resume());
-      if (req.method === 'POST' && url.pathname === '/operator/recover-expired') return send(res, 200, { expired: runtime.recoverExpired() });
+      if (req.method === 'POST' && url.pathname === '/operator/command') return send(res, 200, runtime.operatorCommand(await readJson(req)));
+
+      // Compatibility routes map into the bounded semantic command surface.
+      if (req.method === 'POST' && url.pathname === '/operator/pause') return send(res, 200, runtime.operatorCommand({ action: 'pause-dispatch' }));
+      if (req.method === 'POST' && url.pathname === '/operator/resume') return send(res, 200, runtime.operatorCommand({ action: 'resume-dispatch' }));
+      if (req.method === 'POST' && url.pathname === '/operator/recover-expired') return send(res, 200, runtime.operatorCommand({ action: 'recover-expired' }));
 
       send(res, 404, { error: 'not found' });
     } catch (error) {
