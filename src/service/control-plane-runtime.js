@@ -119,7 +119,14 @@ export class ControlPlaneRuntime {
         };
       }
       const result = this.complete({ taskKey, claim, acceptance: task.metadata?.acceptance ?? {}, evidence }, { idempotencyKey: `fabric-result:${fabricTask.taskId}:${fabricTask.updatedAt}`, now });
-      reconciled.push({ taskKey, action: result.decision?.action ?? null, fabricTaskId: fabricTask.taskId, branchName: evidence.artifacts?.branchName ?? null, commitSha: evidence.artifacts?.commitSha ?? null });
+      let parentTaskKey = null;
+      let parentState = null;
+      if (result.decision?.action === 'ACCEPT' && task.metadata?.repairOf && task.metadata?.closesParentOnAccept === true) {
+        const parent = this.orchestrator.resolveVerificationGate({ taskKey: task.metadata.repairOf, repairTaskKey: task.key, now });
+        parentTaskKey = parent.key;
+        parentState = parent.state;
+      }
+      reconciled.push({ taskKey, action: result.decision?.action ?? null, fabricTaskId: fabricTask.taskId, branchName: evidence.artifacts?.branchName ?? null, commitSha: evidence.artifacts?.commitSha ?? null, parentTaskKey, parentState });
     }
     if (reconciled.length) this.journal.append('fabric.results.reconciled', { results: reconciled }, now);
     return reconciled;
