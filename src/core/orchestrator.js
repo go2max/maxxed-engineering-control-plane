@@ -16,11 +16,7 @@ export class EngineeringOrchestrator {
 
   dispatch(workers, { now = Date.now(), taskPredicate = () => true } = {}) {
     this.claims.sweepExpired(now);
-    const activeClaims = this.claims.list().map((claim) => ({
-      taskKey: claim.taskKey,
-      repository: this.graph.get(claim.taskKey)?.repository ?? null,
-      workerId: claim.ownerId
-    }));
+    const activeClaims = this.claims.list().map((claim) => ({ taskKey: claim.taskKey, repository: this.graph.get(claim.taskKey)?.repository ?? null, workerId: claim.ownerId }));
     const proposed = this.scheduler.plan(workers, { now, activeClaims, taskPredicate });
     const accepted = [];
     for (const dispatch of proposed) {
@@ -57,7 +53,7 @@ export class EngineeringOrchestrator {
       this.claims.release(claim);
     } else if (decision.action === RepairAction.RETRY_REPAIR) {
       const attempt = Number(decision.history?.attempts ?? 1);
-      repairTask = synthesizeRepairTask({ task, verification, attempt });
+      repairTask = synthesizeRepairTask({ task, verification, evidence, attempt });
       if (!this.graph.get(repairTask.key)) this.graph.add(repairTask);
       this.graph.setState(taskKey, TaskState.BLOCKED, { reason: 'repair-task-created', verification, repair: decision, repairTaskKey: repairTask.key, evidenceBundle: bundle });
       this.#record({ taskKey, kind: 'repair-required', verdict: verification.verdict, action: decision.action, evidenceDigest: bundle.digest, relatedTaskKey: repairTask.key }, now);
@@ -79,7 +75,6 @@ export class EngineeringOrchestrator {
     const task = this.graph.get(taskKey);
     if (!task) throw new Error(`unknown task: ${taskKey}`);
     if (task.state !== TaskState.BLOCKED) throw new Error('verification gate may only resolve a blocked task');
-
     if (repairTaskKey) {
       const repair = this.graph.get(repairTaskKey);
       if (!repair || repair.metadata?.repairOf !== taskKey) throw new Error('repair task does not belong to blocked task');
@@ -88,7 +83,6 @@ export class EngineeringOrchestrator {
       this.#record({ taskKey, kind: 'repair-gate-resolved', action: 'READY', relatedTaskKey: repairTaskKey }, now);
       return this.graph.get(taskKey);
     }
-
     if (reconciliationEvidence) {
       if (reconciliationEvidence.authoritativeStateKnown !== true) throw new Error('authoritative external state must be known');
       if (!reconciliationEvidence.observedStateDigest) throw new Error('observedStateDigest is required');
@@ -96,7 +90,6 @@ export class EngineeringOrchestrator {
       this.#record({ taskKey, kind: 'reconciliation-resolved', action: 'READY', metadata: reconciliationEvidence }, now);
       return this.graph.get(taskKey);
     }
-
     throw new Error('repairTaskKey or reconciliationEvidence is required');
   }
 
@@ -106,16 +99,12 @@ export class EngineeringOrchestrator {
       const task = this.graph.get(claim.taskKey);
       if (!task || task.state !== TaskState.CLAIMED) continue;
       const unsafe = task.metadata?.restartable === false;
-      this.graph.setState(task.key, unsafe ? TaskState.BLOCKED : TaskState.READY, {
-        reason: unsafe ? 'claim expired during non-restartable work' : 'claim expired; task returned to frontier',
-        expiredClaim: claim.claimId
-      });
+      this.graph.setState(task.key, unsafe ? TaskState.BLOCKED : TaskState.READY, { reason: unsafe ? 'claim expired during non-restartable work' : 'claim expired; task returned to frontier', expiredClaim: claim.claimId });
     }
     return expired;
   }
 
   #record(entry, now) { return this.verificationLedger?.record(entry, now) ?? null; }
-
   #scopesFor(task) {
     const explicit = task.metadata?.mutationScopes ?? [];
     const repositoryScope = task.repository ? [`repo:${task.repository}`] : [];
