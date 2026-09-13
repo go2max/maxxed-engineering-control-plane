@@ -31,10 +31,23 @@ export class FabricExecutionClient {
   }
 }
 
+function validationChecks(result) {
+  if (!Array.isArray(result?.validation)) return {};
+  return Object.fromEntries(result.validation.map((row, index) => [String(row.name ?? `step-${index + 1}`), {
+    ok: Boolean(row.ok),
+    ...(row.ok ? {} : { class: 'TEST_FAILURE' }),
+    exitCode: row.exitCode ?? null,
+    timedOut: Boolean(row.timedOut),
+    stdout: row.stdout ?? '',
+    stderr: row.stderr ?? '',
+    durationMs: row.durationMs ?? null
+  }]));
+}
+
 export function evidenceFromFabricResult(task, fabricTask) {
   const result = fabricTask?.result ?? fabricTask?.failure ?? {};
   const required = task?.metadata?.acceptance?.requiredChecks ?? [];
-  const checks = { ...(result.checks ?? {}) };
+  const checks = { ...validationChecks(result), ...(result.checks ?? {}) };
   if (fabricTask?.state === 'FAILED') {
     for (const name of required) {
       if (!(name in checks)) checks[name] = { ok: false, class: result.failureClass === 'EXECUTION_FAILURE' ? 'BUILD_FAILURE' : 'TEST_FAILURE', detail: result.error ?? 'worker execution failed' };
@@ -51,9 +64,12 @@ export function evidenceFromFabricResult(task, fabricTask) {
       diff: result.diff ?? '',
       summary: result.summary ?? '',
       durationMs: result.durationMs ?? null,
-      patchBundle: result.patchBundle ? structuredClone(result.patchBundle) : null
+      patchBundle: result.patchBundle ? structuredClone(result.patchBundle) : null,
+      validation: Array.isArray(result.validation) ? structuredClone(result.validation) : null,
+      exactRef: result.exactRef ?? null,
+      repository: result.repository ?? task?.repository ?? null
     },
-    execution: result.evidence ?? [],
+    execution: Array.isArray(result.validation) ? structuredClone(result.validation) : (result.evidence ?? []),
     taskKey: task.key
   };
 }
