@@ -55,11 +55,11 @@ export class FileArtifactStore {
     for (const entry of await readdir(this.root, { withFileTypes: true })) if (entry.isFile() && entry.name.endsWith('.artifact')) {
       const file = path.join(this.root, entry.name); const info = await stat(file); rows.push({ key: entry.name.slice(0, -9), file, size: info.size, mtimeMs: info.mtimeMs });
     }
-    let total = rows.reduce((sum, row) => sum + row.size, 0);
+    let total = rows.reduce((sum, row) => sum + row.size, 0); let evicted = 0;
     for (const row of rows.sort((a, b) => a.mtimeMs - b.mtimeMs)) {
       if (total <= this.maxBytes) break;
-      await this.delete(row.key); total -= row.size;
+      await this.delete(row.key); total -= row.size; evicted += 1;
     }
-    return { bytes: total, evicted: rows.filter((row) => row.size).length };
+    return { bytes: total, evicted };
   }
 }
