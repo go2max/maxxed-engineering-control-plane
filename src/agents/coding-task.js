@@ -5,7 +5,7 @@ function slug(value) {
 export function compileCodingTask({
   key, repository, repoPath, objective, acceptance = {}, testCommands = [], dependencies = [],
   priority = 0, riskClass = 'normal', taskClass = 'standard', ref = 'HEAD', baseBranch = 'main', maxSteps = 24,
-  autoCommit = true, autoPush = true, branchPrefix = 'maxxed/agent'
+  autoCommit = true, autoPush = true, branchPrefix = 'maxxed/agent', modelRequest = null
 } = {}) {
   if (!key) throw new Error('coding task key is required');
   if (!repository) throw new Error('repository is required');
@@ -18,6 +18,12 @@ export function compileCodingTask({
     requiredChecks,
     requireIndependentVerifier: riskClass === 'high' || riskClass === 'critical' || acceptance.requireIndependentVerifier === true,
     ...acceptance
+  };
+  const normalizedModelRequest = modelRequest ?? {
+    capabilities: ['coding'],
+    minContextWindow: 8192,
+    maxCostPerMillionTokens: 0,
+    taskClass: 'coding'
   };
   return {
     key,
@@ -34,6 +40,7 @@ export function compileCodingTask({
       restartable: true,
       mutationScopes: [`repo:${repository}`, `branch-base:${repository}:${branchBase}`],
       acceptance: normalizedAcceptance,
+      modelRequest: normalizedModelRequest,
       execution: {
         kind: 'coding-agent',
         repoPath,
@@ -59,6 +66,8 @@ export function fabricTaskFromDispatch(task, dispatch) {
   if (!dispatch?.claim?.claimId || !dispatch.workerId) throw new Error('dispatch claim and worker are required');
   const generation = Number(dispatch.claim.generation ?? 0);
   const branchName = `${execution.branchBase}-g${generation}`;
+  const selectedModel = dispatch.modelSelection?.model ?? null;
+  if (task.metadata?.modelRequest && !selectedModel?.endpoint) throw new Error('coding task requires a routed local model endpoint');
   return {
     taskId: dispatch.claim.claimId,
     repository: task.repository,
@@ -69,6 +78,8 @@ export function fabricTaskFromDispatch(task, dispatch) {
     payload: {
       ...execution,
       branchName,
+      modelEndpoint: selectedModel?.endpoint ?? execution.modelEndpoint,
+      model: selectedModel?.id ?? execution.model,
       publishAfterLeaseValidation: Boolean(execution.autoPush),
       autoPush: false,
       controlPlaneTaskKey: task.key,
