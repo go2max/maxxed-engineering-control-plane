@@ -5,11 +5,11 @@ export const LeverageStrategy = Object.freeze({ EXACT_REUSE: 'EXACT_REUSE', DETE
 export class LeverageEngine {
   constructor({ cas, graph, transforms, repairs } = {}) { this.cas = cas; this.graph = graph; this.transforms = transforms; this.repairs = repairs; }
 
-  plan({ taskClass = 'standard', normalizedSpec, dependencySeeds = [], context = {}, failureFingerprint = null, environment = null, policyVersion = null } = {}) {
+  plan({ taskClass = 'standard', normalizedSpec, dependencySeeds = [], context = {}, failureFingerprint = null, environment = null, policyVersion = null, exactReuseAllowed = true } = {}) {
     if (!normalizedSpec) throw new Error('normalizedSpec is required');
     const dependencySlice = this.graph?.dependencySlice(dependencySeeds, { depth: 2, maxNodes: 200 }) ?? null;
     const keyInput = { taskClass, normalizedSpec, dependencySlice, environment, policyVersion };
-    const exact = this.cas?.get(keyInput);
+    const exact = exactReuseAllowed ? this.cas?.get(keyInput) : null;
     if (exact) return { strategy: LeverageStrategy.EXACT_REUSE, solutionKey: exact.key, exact, dependencySlice, estimatedReasoningUnits: 0 };
 
     const transformCandidates = this.transforms?.candidates({ taskClass, normalizedSpec, dependencySlice, ...context }) ?? [];
