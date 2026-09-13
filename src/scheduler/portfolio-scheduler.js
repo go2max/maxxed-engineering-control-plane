@@ -66,6 +66,7 @@ export class PortfolioScheduler {
     const originalClaims = structuredClone(activeClaims);
     const repoUsage = new Map();
     for (const claim of activeClaims) if (claim.repository) repoUsage.set(claim.repository, (repoUsage.get(claim.repository) ?? 0) + 1);
+    const activeClaimStage = (claim) => claim.stage ?? taskStage(this.graph.get(claim.taskKey) ?? {});
 
     const workerSlots = new Map(workers.map((worker) => [worker.workerId, Math.max(0, worker.capacity?.freeSlots ?? 0)]));
     const adaptiveLimit = adaptiveLaneCapacity(workers, this.totalLaneLimit);
@@ -82,7 +83,7 @@ export class PortfolioScheduler {
         policyBackpressure.push({ taskKey: task.key, repository: task.repository, reason: 'work-packet-active', stage, packetKey: packet.packetKey });
         return [];
       }
-      if (stage === TaskStage.DEPLOYMENT && activeClaims.some((claim) => claim.stage === TaskStage.DEPLOYMENT)) {
+      if (stage === TaskStage.DEPLOYMENT && activeClaims.some((claim) => activeClaimStage(claim) === TaskStage.DEPLOYMENT)) {
         policyBackpressure.push({ taskKey: task.key, repository: task.repository, reason: 'deployment-serialized', stage });
         return [];
       }
@@ -107,7 +108,7 @@ export class PortfolioScheduler {
         backpressure.push({ taskKey: task.key, reason: 'global-lane-capacity', stage, adaptiveLimit, activeClaims: activeClaims.length });
         continue;
       }
-      if (stage === TaskStage.DEPLOYMENT && activeClaims.some((claim) => claim.stage === TaskStage.DEPLOYMENT && claim.taskKey !== task.key)) {
+      if (stage === TaskStage.DEPLOYMENT && activeClaims.some((claim) => activeClaimStage(claim) === TaskStage.DEPLOYMENT && claim.taskKey !== task.key)) {
         backpressure.push({ taskKey: task.key, reason: 'deployment-serialized', stage });
         continue;
       }
