@@ -6,6 +6,7 @@ import { PortfolioScheduler } from '../scheduler/portfolio-scheduler.js';
 import { SchedulerPolicy } from '../scheduler/scheduler-policy.js';
 import { AcceptanceVerifier } from '../verification/verifier.js';
 import { RepairController } from '../verification/repair-controller.js';
+import { VerificationLedger } from '../verification/verification-ledger.js';
 import { ModelRegistry } from '../models/model-registry.js';
 import { ModelRouter } from '../models/model-router.js';
 import { ModelEvalLedger } from '../models/model-evals.js';
@@ -19,6 +20,7 @@ export class ControlPlaneRuntime {
     this.claims = new ClaimAuthority();
     this.repairs = new RepairController();
     this.verifier = new AcceptanceVerifier();
+    this.verificationLedger = new VerificationLedger();
     this.policy = new SchedulerPolicy();
     this.journal = new EventJournal();
     this.modelRegistry = new ModelRegistry();
@@ -32,7 +34,7 @@ export class ControlPlaneRuntime {
     this.modelRouter = new ModelRouter({ registry: this.modelRegistry, evalLedger: this.modelEvals, allowExternalEscalation: false });
     this.modelPool = new LocalModelExecutionPool({ registry: this.modelRegistry, router: this.modelRouter, governor: this.modelGovernor, clientFactory: this.modelClientFactory });
     this.scheduler = new PortfolioScheduler({ graph: this.graph, policy: this.policy, ...schedulerOptions });
-    this.orchestrator = new EngineeringOrchestrator({ graph: this.graph, scheduler: this.scheduler, claims: this.claims, verifier: this.verifier, repairs: this.repairs, modelRouter: this.modelRouter });
+    this.orchestrator = new EngineeringOrchestrator({ graph: this.graph, scheduler: this.scheduler, claims: this.claims, verifier: this.verifier, repairs: this.repairs, modelRouter: this.modelRouter, verificationLedger: this.verificationLedger });
     this.workerProvider = workerProvider;
     this.paused = false;
     this.restoredAt = null;
@@ -70,6 +72,12 @@ export class ControlPlaneRuntime {
     });
   }
 
+  resolveVerificationGate(payload, now = Date.now()) {
+    const result = this.orchestrator.resolveVerificationGate({ ...payload, now });
+    this.journal.append('verification.gate.resolved', { taskKey: payload.taskKey, repairTaskKey: payload.repairTaskKey ?? null, reconciliation: Boolean(payload.reconciliationEvidence) }, now);
+    return result;
+  }
+
   recoverExpired(now = Date.now()) {
     const expired = this.orchestrator.recoverExpired(now);
     if (expired.length) this.journal.append('claims.recovered', { claimIds: expired.map((entry) => entry.claimId), taskKeys: expired.map((entry) => entry.taskKey) }, now);
@@ -92,9 +100,7 @@ export class ControlPlaneRuntime {
       return result;
     } catch (error) {
       const attempted = error.attempts?.filter((item) => item.outcome === 'failure') ?? [];
-      for (const attempt of attempted) {
-        this.modelEvals.record({ modelId: attempt.modelId, taskClass: request.taskClass ?? 'standard', accepted: false, latencyMs: Date.now() - started, failureClass: 'INFERENCE_FAILURE' });
-      }
+      for (const attempt of attempted) this.modelEvals.record({ modelId: attempt.modelId, taskClass: request.taskClass ?? 'standard', accepted: false, latencyMs: Date.now() - started, failureClass: 'INFERENCE_FAILURE' });
       this.journal.append('model.inference.failed', { taskClass: request.taskClass ?? 'standard', attempts: error.attempts ?? [] }, now);
       throw error;
     }
@@ -106,11 +112,9 @@ export class ControlPlaneRuntime {
     switch (action) {
       case 'pause-dispatch': result = this.pause(); break;
       case 'resume-dispatch': result = this.resume(); break;
-      case 'set-repository-lane-limit': {
+      case 'set-repository-lane-limit':
         if (!input.repository || !Number.isInteger(input.limit) || input.limit < 0 || input.limit > 64) throw new Error('repository and integer limit 0..64 are required');
-        this.scheduler.repoLaneLimits[input.repository] = input.limit;
-        result = this.status(); break;
-      }
+        this.scheduler.repoLaneLimits[input.repository] = input.limit; result = this.status(); break;
       case 'freeze-repository': this.policy.freezeRepository(input.repository, input.reason); result = this.status(); break;
       case 'thaw-repository': this.policy.thawRepository(input.repository); result = this.status(); break;
       case 'drain-repository': this.policy.drainRepository(input.repository, input.reason); result = this.status(); break;
@@ -118,6 +122,7 @@ export class ControlPlaneRuntime {
       case 'set-priority-override': this.policy.setPriorityOverride(input); result = this.status(); break;
       case 'clear-priority-override': this.policy.clearPriorityOverride(input.taskKey); result = this.status(); break;
       case 'recover-expired': result = { expired: this.recoverExpired(now) }; break;
+      case 'resolve-verification-gate': result = this.resolveVerificationGate(input, now); break;
       default: throw new Error(`unsupported operator command: ${action}`);
     }
     this.journal.append('operator.command', { action, input }, now);
@@ -128,14 +133,7 @@ export class ControlPlaneRuntime {
     const models = this.modelRegistry.list();
     const unhealthyRequiredModels = models.filter((model) => model.enabled && model.kind === 'local' && model.metadata?.required === true && !model.healthy).map((model) => model.id);
     const ready = unhealthyRequiredModels.length === 0;
-    return {
-      ready,
-      state: ready ? (this.paused ? 'PAUSED' : 'READY') : 'DEGRADED',
-      paused: this.paused,
-      unhealthyRequiredModels,
-      restoredAt: this.restoredAt,
-      journalSequence: this.journal.sequence
-    };
+    return { ready, state: ready ? (this.paused ? 'PAUSED' : 'READY') : 'DEGRADED', paused: this.paused, unhealthyRequiredModels, restoredAt: this.restoredAt, journalSequence: this.journal.sequence };
   }
 
   status() {
@@ -148,22 +146,19 @@ export class ControlPlaneRuntime {
       readiness: this.readiness(),
       tasks: { total: tasks.length, byState: stateCounts, executable: this.graph.frontier().length },
       claims: { active: claims.length },
-      models: {
-        registered: registeredModels.length,
-        healthy: registeredModels.filter((model) => model.healthy && model.enabled).length,
-        runtime: this.modelGovernor.list(),
-        evals: this.modelEvals.list()
-      },
+      verification: { records: this.verificationLedger.entries.length, sequence: this.verificationLedger.sequence },
+      models: { registered: registeredModels.length, healthy: registeredModels.filter((model) => model.healthy && model.enabled).length, runtime: this.modelGovernor.list(), evals: this.modelEvals.list() },
       scheduler: { repositoryLaneLimits: { ...this.scheduler.repoLaneLimits }, policy: this.policy.status() }
     };
   }
 
   snapshot() {
     return {
-      version: 4,
+      version: 5,
       core: snapshotRuntime({ graph: this.graph, claims: this.claims, repairs: this.repairs }),
       policy: this.policy.snapshot(),
       journal: this.journal.snapshot(),
+      verification: this.verificationLedger.snapshot(),
       models: { governor: this.modelGovernor.snapshot(), evals: this.modelEvals.snapshot() },
       paused: this.paused,
       repositoryLaneLimits: { ...this.scheduler.repoLaneLimits }
@@ -171,42 +166,32 @@ export class ControlPlaneRuntime {
   }
 
   restore(snapshot, now = Date.now()) {
+    if (snapshot?.version === 5) {
+      const restored = restoreRuntime(snapshot.core, { graph: this.graph, claims: this.claims, repairs: this.repairs, now });
+      this.policy.restore(snapshot.policy); this.journal.restore(snapshot.journal); this.verificationLedger.restore(snapshot.verification);
+      this.modelGovernor.restore(snapshot.models?.governor, now); this.modelEvals.restore(snapshot.models?.evals);
+      this.paused = Boolean(snapshot.paused); this.scheduler.repoLaneLimits = { ...(snapshot.repositoryLaneLimits ?? {}) }; this.restoredAt = now;
+      this.journal.append('runtime.restored', { snapshotVersion: 5 }, now); return restored;
+    }
     if (snapshot?.version === 4) {
       const restored = restoreRuntime(snapshot.core, { graph: this.graph, claims: this.claims, repairs: this.repairs, now });
-      this.policy.restore(snapshot.policy);
-      this.journal.restore(snapshot.journal);
-      this.modelGovernor.restore(snapshot.models?.governor, now);
-      this.modelEvals.restore(snapshot.models?.evals);
-      this.paused = Boolean(snapshot.paused);
-      this.scheduler.repoLaneLimits = { ...(snapshot.repositoryLaneLimits ?? {}) };
-      this.restoredAt = now;
-      this.journal.append('runtime.restored', { snapshotVersion: 4 }, now);
-      return restored;
+      this.policy.restore(snapshot.policy); this.journal.restore(snapshot.journal); this.modelGovernor.restore(snapshot.models?.governor, now); this.modelEvals.restore(snapshot.models?.evals);
+      this.paused = Boolean(snapshot.paused); this.scheduler.repoLaneLimits = { ...(snapshot.repositoryLaneLimits ?? {}) }; this.restoredAt = now;
+      this.journal.append('runtime.restored', { snapshotVersion: 4 }, now); return restored;
     }
     if (snapshot?.version === 3) {
       const restored = restoreRuntime(snapshot.core, { graph: this.graph, claims: this.claims, repairs: this.repairs, now });
-      this.policy.restore(snapshot.policy);
-      this.modelGovernor.restore(snapshot.models?.governor, now);
-      this.modelEvals.restore(snapshot.models?.evals);
-      this.paused = Boolean(snapshot.paused);
-      this.scheduler.repoLaneLimits = { ...(snapshot.repositoryLaneLimits ?? {}) };
-      this.restoredAt = now;
-      this.journal.append('runtime.restored', { snapshotVersion: 3 }, now);
-      return restored;
+      this.policy.restore(snapshot.policy); this.modelGovernor.restore(snapshot.models?.governor, now); this.modelEvals.restore(snapshot.models?.evals);
+      this.paused = Boolean(snapshot.paused); this.scheduler.repoLaneLimits = { ...(snapshot.repositoryLaneLimits ?? {}) }; this.restoredAt = now;
+      this.journal.append('runtime.restored', { snapshotVersion: 3 }, now); return restored;
     }
     if (snapshot?.version === 2) {
       const restored = restoreRuntime(snapshot.core, { graph: this.graph, claims: this.claims, repairs: this.repairs, now });
-      this.policy.restore(snapshot.policy);
-      this.paused = Boolean(snapshot.paused);
-      this.scheduler.repoLaneLimits = { ...(snapshot.repositoryLaneLimits ?? {}) };
-      this.restoredAt = now;
-      this.journal.append('runtime.restored', { snapshotVersion: 2 }, now);
-      return restored;
+      this.policy.restore(snapshot.policy); this.paused = Boolean(snapshot.paused); this.scheduler.repoLaneLimits = { ...(snapshot.repositoryLaneLimits ?? {}) }; this.restoredAt = now;
+      this.journal.append('runtime.restored', { snapshotVersion: 2 }, now); return restored;
     }
     const restored = restoreRuntime(snapshot, { graph: this.graph, claims: this.claims, repairs: this.repairs, now });
-    this.restoredAt = now;
-    this.journal.append('runtime.restored', { snapshotVersion: 1 }, now);
-    return restored;
+    this.restoredAt = now; this.journal.append('runtime.restored', { snapshotVersion: 1 }, now); return restored;
   }
 
   pause() { this.paused = true; return this.status(); }
