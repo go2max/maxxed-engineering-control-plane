@@ -15,6 +15,11 @@ import { TrajectoryHarvester } from '../leverage/trajectory-harvester.js';
 import { RepairMemory } from '../leverage/repair-memory.js';
 import { LeverageEngine } from '../leverage/leverage-engine.js';
 import { LeverageRuntimeAdapter } from '../leverage/runtime-adapter.js';
+import { ArtifactCache } from '../leverage/artifact-cache.js';
+import { ProductFamilyPlanner } from '../leverage/product-family-planner.js';
+import { BottleneckOptimizer } from '../leverage/bottleneck-optimizer.js';
+import { MaintenancePlanner } from '../leverage/maintenance-planner.js';
+import { defaultControlPlaneReplayProjector } from '../leverage/execution-replay.js';
 
 const host = process.env.MAXXED_CONTROL_HOST ?? '127.0.0.1';
 const port = Number(process.env.MAXXED_CONTROL_PORT ?? 7790);
@@ -42,24 +47,31 @@ const runtime = new ControlPlaneRuntime({
 });
 
 const solutionCas = new SolutionCAS({ maxEntries: Number(process.env.MAXXED_SOLUTION_CACHE_MAX ?? 10000) });
+const artifactCache = new ArtifactCache({ maxEntries: Number(process.env.MAXXED_ARTIFACT_CACHE_MAX ?? 50000) });
 const semanticGraph = new SemanticCodeGraph();
 const transforms = new TransformRegistry();
 const trajectoryHarvester = new TrajectoryHarvester({ maxRecords: Number(process.env.MAXXED_TRAJECTORY_MAX ?? 50000) });
 const repairMemory = new RepairMemory();
+const productFamilies = new ProductFamilyPlanner();
+const bottleneckOptimizer = new BottleneckOptimizer();
+const maintenancePlanner = new MaintenancePlanner();
+const replayProjector = defaultControlPlaneReplayProjector();
 const leverageEngine = new LeverageEngine({ cas: solutionCas, graph: semanticGraph, transforms, repairs: repairMemory });
 const leverage = new LeverageRuntimeAdapter({ runtime, engine: leverageEngine, cas: solutionCas, harvester: trajectoryHarvester });
-const leverageComponents = { leverage, solutionCas, semanticGraph, transforms, trajectoryHarvester, repairMemory, leverageEngine };
+const leverageComponents = { leverage, solutionCas, artifactCache, semanticGraph, transforms, trajectoryHarvester, repairMemory, productFamilies, bottleneckOptimizer, maintenancePlanner, replayProjector, leverageEngine };
 
 const store = new RuntimeStateStore(statePath);
 const leverageStore = new RuntimeStateStore(leverageStatePath);
 const restored = await store.load();
 if (restored) runtime.restore(restored);
 const restoredLeverage = await leverageStore.load();
-if (restoredLeverage?.version === 1) {
+if (restoredLeverage?.version === 2 || restoredLeverage?.version === 1) {
   solutionCas.restore(restoredLeverage.solutionCas);
+  artifactCache.restore(restoredLeverage.artifactCache);
   semanticGraph.restore(restoredLeverage.semanticGraph);
   trajectoryHarvester.restore(restoredLeverage.trajectories);
   repairMemory.restore(restoredLeverage.repairMemory);
+  productFamilies.restore(restoredLeverage.productFamilies);
 }
 
 const githubAdapter = githubToken ? new GitHubPullRequestAdapter({ token: githubToken }) : null;
@@ -72,7 +84,15 @@ const persist = async () => {
   saving = true;
   try {
     await store.save(runtime.snapshot());
-    await leverageStore.save({ version: 1, solutionCas: solutionCas.snapshot(), semanticGraph: semanticGraph.snapshot(), trajectories: trajectoryHarvester.snapshot(), repairMemory: repairMemory.snapshot() });
+    await leverageStore.save({
+      version: 2,
+      solutionCas: solutionCas.snapshot(),
+      artifactCache: artifactCache.snapshot(),
+      semanticGraph: semanticGraph.snapshot(),
+      trajectories: trajectoryHarvester.snapshot(),
+      repairMemory: repairMemory.snapshot(),
+      productFamilies: productFamilies.snapshot()
+    });
   } catch (error) { console.error(JSON.stringify({ event: 'control-plane-persistence-failed', error: error.message })); }
   finally { saving = false; }
 };
@@ -81,7 +101,7 @@ timer.unref();
 
 server.listen(port, host, () => {
   console.log(`maxxed engineering control plane listening on http://${host}:${port}`);
-  console.log(`leverage fabric active: cache=${solutionCas.entries.size}, trajectories=${trajectoryHarvester.records.length}`);
+  console.log(`leverage fabric active: solutions=${solutionCas.entries.size}, artifacts=${artifactCache.entries.size}, trajectories=${trajectoryHarvester.records.length}`);
   if (codingLoop) {
     codingLoop.start();
     console.log(`autonomous coding loop active at ${runtime.throughput.targetMultiplier}x baseline target`);
