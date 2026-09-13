@@ -36,6 +36,47 @@ test('authenticated API ingests and dispatches task while unauthorized access fa
   assert.equal(status.claims.active, 1);
 });
 
+test('operator command endpoint requires idempotency identity and rejects mismatches', async (t) => {
+  const runtime = new ControlPlaneRuntime({ workerProvider: async () => [] });
+  const server = createControlPlaneServer({ runtime, adminToken: 'secret' });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  t.after(() => server.close());
+  const root = `http://127.0.0.1:${server.address().port}`;
+  const headers = { authorization: 'Bearer secret', 'content-type': 'application/json' };
+
+  const missing = await fetch(`${root}/operator/command`, { method: 'POST', headers, body: JSON.stringify({ action: 'pause-dispatch' }) });
+  assert.equal(missing.status, 400);
+  assert.match((await missing.json()).error, /idempotency-key or commandId is required/);
+
+  const mismatched = await fetch(`${root}/operator/command`, {
+    method: 'POST',
+    headers: { ...headers, 'idempotency-key': 'header-id' },
+    body: JSON.stringify({ action: 'pause-dispatch', commandId: 'body-id' })
+  });
+  assert.equal(mismatched.status, 400);
+  assert.match((await mismatched.json()).error, /does not match/);
+});
+
+test('operator command endpoint deduplicates duplicate network delivery', async (t) => {
+  const runtime = new ControlPlaneRuntime({ workerProvider: async () => [] });
+  const server = createControlPlaneServer({ runtime, adminToken: 'secret' });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  t.after(() => server.close());
+  const root = `http://127.0.0.1:${server.address().port}`;
+  const headers = { authorization: 'Bearer secret', 'content-type': 'application/json', 'idempotency-key': 'cmd-1' };
+  const body = JSON.stringify({ action: 'freeze-repository', input: { repository: 'r1', reason: 'maintenance' }, commandId: 'cmd-1' });
+
+  const first = await fetch(`${root}/operator/command`, { method: 'POST', headers, body });
+  assert.equal(first.status, 200);
+  const sequenceAfterFirst = runtime.journal.sequence;
+  const second = await fetch(`${root}/operator/command`, { method: 'POST', headers, body });
+  assert.equal(second.status, 200);
+  assert.equal(runtime.journal.sequence, sequenceAfterFirst);
+  assert.equal(runtime.status().scheduler.policy.frozenRepositories.length, 1);
+});
+
 test('pause prevents dispatch until resumed', async () => {
   const runtime = new ControlPlaneRuntime({ workerProvider: async () => [{ workerId: 'w1', state: 'AVAILABLE', capabilities: [], capacity: { freeSlots: 1 }, pressure: {}, metadata: {} }] });
   runtime.ingest({ key: 't1' });

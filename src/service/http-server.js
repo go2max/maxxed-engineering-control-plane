@@ -22,6 +22,13 @@ function idempotencyKey(req) {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
+function operatorCommandId(req, body) {
+  const headerId = idempotencyKey(req);
+  const bodyId = typeof body?.commandId === 'string' && body.commandId.trim() ? body.commandId.trim() : null;
+  if (headerId && bodyId && headerId !== bodyId) throw new Error('operator command idempotency key does not match commandId');
+  return headerId ?? bodyId;
+}
+
 export function createControlPlaneServer({ runtime, adminToken }) {
   if (!runtime) throw new Error('runtime is required');
   if (!adminToken) throw new Error('adminToken is required');
@@ -55,13 +62,18 @@ export function createControlPlaneServer({ runtime, adminToken }) {
         const body = await readJson(req);
         return send(res, 200, runtime.complete(body, { idempotencyKey: idempotencyKey(req) }));
       }
-      if (req.method === 'POST' && url.pathname === '/operator/command') return send(res, 200, runtime.operatorCommand(await readJson(req)));
+      if (req.method === 'POST' && url.pathname === '/operator/command') {
+        const body = await readJson(req);
+        const commandId = operatorCommandId(req, body);
+        if (!commandId) return send(res, 400, { error: 'operator command idempotency-key or commandId is required' });
+        return send(res, 200, runtime.operatorCommand(body, { commandId }));
+      }
       if (req.method === 'POST' && url.pathname === '/models/warmup') return send(res, 200, { models: await runtime.warmupModels() });
       if (req.method === 'POST' && url.pathname === '/models/execute') return send(res, 200, await runtime.executeModel(await readJson(req)));
 
-      if (req.method === 'POST' && url.pathname === '/operator/pause') return send(res, 200, runtime.operatorCommand({ action: 'pause-dispatch' }));
-      if (req.method === 'POST' && url.pathname === '/operator/resume') return send(res, 200, runtime.operatorCommand({ action: 'resume-dispatch' }));
-      if (req.method === 'POST' && url.pathname === '/operator/recover-expired') return send(res, 200, runtime.operatorCommand({ action: 'recover-expired' }));
+      if (req.method === 'POST' && url.pathname === '/operator/pause') return send(res, 200, runtime.operatorCommand({ action: 'pause-dispatch' }, { commandId: idempotencyKey(req) ?? `legacy-pause-${Date.now()}` }));
+      if (req.method === 'POST' && url.pathname === '/operator/resume') return send(res, 200, runtime.operatorCommand({ action: 'resume-dispatch' }, { commandId: idempotencyKey(req) ?? `legacy-resume-${Date.now()}` }));
+      if (req.method === 'POST' && url.pathname === '/operator/recover-expired') return send(res, 200, runtime.operatorCommand({ action: 'recover-expired' }, { commandId: idempotencyKey(req) ?? `legacy-recover-${Date.now()}` }));
 
       send(res, 404, { error: 'not found' });
     } catch (error) {
