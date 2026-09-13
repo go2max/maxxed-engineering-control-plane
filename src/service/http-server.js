@@ -77,7 +77,7 @@ export function createControlPlaneServer({ runtime, adminToken, codingLoop = nul
         const body = await readJson(req);
         const task = compileCodingTask(body);
         if (leverage) {
-          const prepared = leverage.prepareCodingTask(task, body.leverageContext ?? {});
+          const prepared = await leverage.prepareCodingTask(task, body.leverageContext ?? {});
           if (prepared.reused) return send(res, 200, prepared);
           return send(res, 201, { task: runtime.ingest(prepared.task, { idempotencyKey: idempotencyKey(req) ?? task.dedupeKey }), leverage: prepared.plan });
         }
