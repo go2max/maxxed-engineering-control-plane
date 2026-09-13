@@ -1,5 +1,6 @@
 import http from 'node:http';
 import { compileCodingTask } from '../agents/coding-task.js';
+import { replaceTextTransform } from '../leverage/transform-registry.js';
 
 async function readJson(req) {
   const chunks = [];
@@ -30,9 +31,10 @@ function operatorCommandId(req, body) {
   return headerId ?? bodyId;
 }
 
-export function createControlPlaneServer({ runtime, adminToken, codingLoop = null }) {
+export function createControlPlaneServer({ runtime, adminToken, codingLoop = null, leverageComponents = null }) {
   if (!runtime) throw new Error('runtime is required');
   if (!adminToken) throw new Error('adminToken is required');
+  const leverage = leverageComponents?.leverage ?? null;
 
   const server = http.createServer(async (req, res) => {
     try {
@@ -49,6 +51,7 @@ export function createControlPlaneServer({ runtime, adminToken, codingLoop = nul
       if (req.method === 'GET' && url.pathname === '/claims') return send(res, 200, { claims: runtime.claims.list() });
       if (req.method === 'GET' && url.pathname === '/models') return send(res, 200, { models: runtime.status().models });
       if (req.method === 'GET' && url.pathname === '/coding/status') return send(res, 200, { enabled: Boolean(codingLoop), running: Boolean(codingLoop?.running), lastTick: codingLoop?.lastTick ?? null, throughput: runtime.lastThroughputDecision });
+      if (req.method === 'GET' && url.pathname === '/leverage/status') return send(res, 200, leverage ? { ...leverage.status(), graphNodes: leverageComponents.semanticGraph.nodes.size, graphEdges: leverageComponents.semanticGraph.edges.size, transforms: leverageComponents.transforms.manifest(), repairFingerprints: leverageComponents.repairMemory.byFingerprint.size } : { enabled: false });
       if (req.method === 'GET' && url.pathname === '/events') {
         const afterSequence = Number(url.searchParams.get('afterSequence') ?? 0);
         const limit = Number(url.searchParams.get('limit') ?? 200);
@@ -62,11 +65,35 @@ export function createControlPlaneServer({ runtime, adminToken, codingLoop = nul
       if (req.method === 'POST' && url.pathname === '/coding/tasks') {
         const body = await readJson(req);
         const task = compileCodingTask(body);
+        if (leverage) {
+          const prepared = leverage.prepareCodingTask(task, body.leverageContext ?? {});
+          if (prepared.reused) return send(res, 200, prepared);
+          return send(res, 201, { task: runtime.ingest(prepared.task, { idempotencyKey: idempotencyKey(req) ?? task.dedupeKey }), leverage: prepared.plan });
+        }
         return send(res, 201, runtime.ingest(task, { idempotencyKey: idempotencyKey(req) ?? task.dedupeKey }));
       }
       if (req.method === 'POST' && url.pathname === '/coding/tick') {
         if (!codingLoop) return send(res, 503, { error: 'autonomous coding loop is not configured' });
         return send(res, 200, await codingLoop.tick());
+      }
+      if (req.method === 'POST' && url.pathname === '/leverage/plan') {
+        if (!leverageComponents) return send(res, 503, { error: 'leverage fabric is not configured' });
+        return send(res, 200, leverageComponents.leverageEngine.plan(await readJson(req)));
+      }
+      if (req.method === 'POST' && url.pathname === '/leverage/graph/nodes') {
+        if (!leverageComponents) return send(res, 503, { error: 'leverage fabric is not configured' });
+        const body = await readJson(req); const rows = Array.isArray(body.nodes) ? body.nodes : [body];
+        return send(res, 200, { nodes: rows.map((row) => leverageComponents.semanticGraph.upsertNode(row)) });
+      }
+      if (req.method === 'POST' && url.pathname === '/leverage/graph/edges') {
+        if (!leverageComponents) return send(res, 503, { error: 'leverage fabric is not configured' });
+        const body = await readJson(req); const rows = Array.isArray(body.edges) ? body.edges : [body];
+        return send(res, 200, { edges: rows.map((row) => leverageComponents.semanticGraph.addEdge(row)) });
+      }
+      if (req.method === 'POST' && url.pathname === '/leverage/transforms/text') {
+        if (!leverageComponents) return send(res, 503, { error: 'leverage fabric is not configured' });
+        const body = await readJson(req); const id = leverageComponents.transforms.register(replaceTextTransform(body));
+        return send(res, 201, { id });
       }
       if (req.method === 'POST' && url.pathname === '/dispatch') return send(res, 200, { dispatches: await runtime.dispatch() });
       if (req.method === 'POST' && url.pathname === '/results') {
