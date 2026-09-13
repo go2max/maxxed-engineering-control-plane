@@ -8,6 +8,7 @@
     "start": "node src/service/main.js",
     "test": "node --test",
     "validate:completion": "node scripts/validate-completion.mjs",
-    "validate": "npm test && npm run validate:completion"
+    "validate:training": "node scripts/validate-training-data.mjs",
+    "validate": "npm test && npm run validate:completion && npm run validate:training"
   }
 }
