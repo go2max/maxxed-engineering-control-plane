@@ -2,6 +2,7 @@ import { TaskState } from './task-graph.js';
 import { RepairAction } from '../verification/repair-controller.js';
 import { buildEvidenceBundle, buildReconciliationRequirement, synthesizeRepairTask } from '../verification/evidence-bundle.js';
 import { EngineeringTraceLedger, TraceDisposition } from '../telemetry/engineering-trace.js';
+import { workPacketClaimScope, workPacketView } from '../scheduler/work-packet-adapter.js';
 
 export class EngineeringOrchestrator {
   constructor({ graph, scheduler, claims, verifier, repairs, modelRouter, verificationLedger = null, telemetry = new EngineeringTraceLedger() } = {}) {
@@ -18,7 +19,11 @@ export class EngineeringOrchestrator {
 
   dispatch(workers, { now = Date.now(), taskPredicate = () => true, admissionDecision = {} } = {}) {
     this.recoverExpired(now);
-    const activeClaims = this.claims.list().map((claim) => ({ taskKey: claim.taskKey, repository: this.graph.get(claim.taskKey)?.repository ?? null, workerId: claim.ownerId }));
+    const activeClaims = this.claims.list().map((claim) => {
+      const task = this.graph.get(claim.taskKey);
+      const packet = workPacketView(task);
+      return { taskKey: claim.taskKey, repository: task?.repository ?? null, workerId: claim.ownerId, packetKey: packet.valid ? packet.packetKey : null };
+    });
     const proposed = this.scheduler.plan(workers, { now, activeClaims, taskPredicate, admissionDecision });
     const accepted = [];
     for (const dispatch of proposed) {
@@ -35,7 +40,7 @@ export class EngineeringOrchestrator {
         continue;
       }
       this.graph.setState(task.key, TaskState.CLAIMED, { workerId: dispatch.workerId, claimId: claim.claimId });
-      const span = this.#trace(task, { name: 'control.task.dispatch', lane: task.metadata?.lane, stage: 'scheduling', workerId: dispatch.workerId, model: modelSelection?.model?.id ?? modelSelection?.model?.name ?? null, provider: modelSelection?.model?.provider ?? null, queuedAt: task.createdAt ?? task.metadata?.queuedAt ?? now, startedAt: now, completedAt: now, disposition: TraceDisposition.OVERHEAD, attributes: { score: dispatch.score ?? null, claimId: claim.claimId } });
+      const span = this.#trace(task, { name: 'control.task.dispatch', lane: task.metadata?.lane, stage: 'scheduling', workerId: dispatch.workerId, model: modelSelection?.model?.id ?? modelSelection?.model?.name ?? null, provider: modelSelection?.model?.provider ?? null, queuedAt: task.createdAt ?? task.metadata?.queuedAt ?? now, startedAt: now, completedAt: now, disposition: TraceDisposition.OVERHEAD, attributes: { score: dispatch.score ?? null, claimId: claim.claimId, workPacketKey: dispatch.workPacket?.packetKey ?? null, workPacketBranch: dispatch.workPacket?.branch ?? null, mutationScopes: scopes } });
       accepted.push({ ...dispatch, claim, modelSelection, telemetry: span ? { traceId: span.traceId, spanId: span.spanId } : null });
     }
     return accepted;
@@ -128,8 +133,13 @@ export class EngineeringOrchestrator {
     return this.telemetry?.record({ ...input, traceId: input.traceId ?? task?.metadata?.telemetry?.traceId, parentSpanId: input.parentSpanId ?? task?.metadata?.telemetry?.spanId ?? null, taskKey: task?.key, repository: task?.repository, branch: task?.metadata?.branch ?? null, commitSha: task?.metadata?.commitSha ?? null, prNumber: task?.metadata?.prNumber ?? null }) ?? null;
   }
   #scopesFor(task) {
-    const explicit = task.metadata?.mutationScopes ?? [];
-    const repositoryScope = task.repository ? [`repo:${task.repository}`] : [];
-    return [...new Set([...repositoryScope, ...explicit])];
+    const raw = Array.isArray(task.metadata?.mutationScopes) ? task.metadata.mutationScopes : [];
+    const explicit = raw.map((value) => String(value ?? '').trim()).filter(Boolean).map((scope) => {
+      if (scope.startsWith('global:') || scope.startsWith('repo:')) return scope;
+      return task.repository ? `repo:${task.repository}:${scope}` : scope;
+    });
+    const repositoryScope = explicit.length ? [] : (task.repository ? [`repo:${task.repository}`] : []);
+    const packetScope = workPacketClaimScope(task);
+    return [...new Set([...repositoryScope, ...explicit, ...(packetScope ? [packetScope] : [])])];
   }
 }
