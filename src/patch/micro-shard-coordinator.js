@@ -168,6 +168,33 @@ export class MicroShardCoordinator {
     const acceptedParents = [];
     const failedParents = [];
 
+    for (const row of reconciled) {
+      if (row.action !== 'TERMINATE') continue;
+      const failedTask = this.runtime.graph.get(row.taskKey);
+      const shard = failedTask?.metadata?.patchFabric?.kind === 'shard'
+        ? failedTask
+        : failedTask?.metadata?.repairOf ? this.runtime.graph.get(failedTask.metadata.repairOf) : null;
+      const patch = shard?.metadata?.patchFabric;
+      if (!shard || patch?.kind !== 'shard') continue;
+      const session = this.patchFabric.get(patch.sessionId);
+      if (!session || ['FAILED', 'ACCEPTED', 'CANCELLED'].includes(session.state)) continue;
+      this.patchFabric.fail(patch.sessionId, {
+        phase: 'shard',
+        error: `terminal micro-shard failure: ${shard.key}`,
+        evidence: { failedTaskKey: failedTask.key, shardTaskKey: shard.key, action: row.action },
+        now
+      });
+      if (shard.state !== TaskState.FAILED) this.runtime.graph.setState(shard.key, TaskState.FAILED, { reason: 'patch-shard-terminal-failure', failedTaskKey: failedTask.key });
+      const parent = this.runtime.graph.get(patch.parentTaskKey);
+      if (parent && parent.state !== TaskState.ACCEPTED) {
+        this.runtime.graph.setState(parent.key, TaskState.FAILED, {
+          reason: 'patch-shard-terminal-failure', patchSessionId: patch.sessionId, shardTaskKey: shard.key, failedTaskKey: failedTask.key
+        });
+        this.runtime.journal.append('patch.parent.failed', { parentTaskKey: parent.key, sessionId: patch.sessionId, shardTaskKey: shard.key, failedTaskKey: failedTask.key }, now);
+        failedParents.push({ parentTaskKey: parent.key, sessionId: patch.sessionId, shardTaskKey: shard.key, failedTaskKey: failedTask.key, action: row.action });
+      }
+    }
+
     const candidateKeys = new Set();
     for (const row of reconciled) {
       if (row.action === 'ACCEPT') candidateKeys.add(row.taskKey);
@@ -183,6 +210,7 @@ export class MicroShardCoordinator {
       if (!bundle) throw new Error(`accepted micro-shard is missing patch bundle: ${task.key}`);
       const session = this.patchFabric.get(patch.sessionId);
       if (!session) throw new Error(`missing patch session for shard: ${task.key}`);
+      if (session.state === 'FAILED') continue;
       if (session.bundleDigests?.[patch.shardKey]) continue;
       const next = this.patchFabric.submit(patch.sessionId, bundle, { expectedGeneration: bundle.generation, now });
       submitted.push({ taskKey, sessionId: patch.sessionId, shardKey: patch.shardKey, state: next.state });
@@ -190,7 +218,7 @@ export class MicroShardCoordinator {
 
     for (const session of this.patchFabric.list().filter((row) => row.state === 'READY_TO_COMPOSE')) {
       const parent = this.runtime.graph.get(session.parentTaskKey);
-      if (!parent) continue;
+      if (!parent || parent.state === TaskState.FAILED) continue;
       const existing = this.runtime.graph.list().find((task) => task.metadata?.patchFabric?.kind === 'composition' && task.metadata.patchFabric.sessionId === session.sessionId);
       if (existing) continue;
       const composition = this.patchFabric.compose(session.sessionId, { now });
