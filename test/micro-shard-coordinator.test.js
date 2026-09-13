@@ -31,26 +31,29 @@ function runtimeHarness() {
   };
 }
 
-test('micro-shard coordinator fans out, composes, verifies once, and accepts only the parent', () => {
-  const runtime = runtimeHarness();
-  const patchFabric = new PatchFabric();
-  const planner = new MicroShardPlanner({ fixedShardOverheadMs: 0, compositionOverheadMs: 0, targetLines: 100, maxLines: 150 });
-  const coordinator = new MicroShardCoordinator({ runtime, patchFabric, shardPlanner: planner });
-
+function addShardableParent(runtime, key = 'parent') {
   runtime.graph.add({
-    key: 'parent', repository: 'org/repo', objective: 'rename four independent files', state: TaskState.READY,
+    key, repository: 'org/repo', objective: 'rename four independent files', state: TaskState.READY,
     riskClass: 'normal', taskClass: 'migration', requirements: { capabilities: ['coding-agent', 'git', 'node'] },
     metadata: {
       priority: 10,
       acceptance: { requiredChecks: ['full'] },
       execution: {
-        kind: 'coding-agent', repoPath: '/repo', ref: BASE, baseBranch: 'main', branchBase: 'maxxed/agent/parent',
+        kind: 'coding-agent', repoPath: '/repo', ref: BASE, baseBranch: 'main', branchBase: `maxxed/agent/${key}`,
         goal: 'rename files', testCommands: [{ name: 'full', command: 'npm', args: ['test'] }], autoCommit: true, autoPush: true,
         precomputedWrites: [1, 2, 3, 4].map((n) => ({ path: `src/f${n}.js`, content: `export const n = ${n};\n` })),
         microSharding: { estimatedMonolithicMs: 60_000, maxShards: 4 }
       }
     }
   });
+}
+
+test('micro-shard coordinator fans out, composes, verifies once, and accepts only the parent', () => {
+  const runtime = runtimeHarness();
+  const patchFabric = new PatchFabric();
+  const planner = new MicroShardPlanner({ fixedShardOverheadMs: 0, compositionOverheadMs: 0, targetLines: 100, maxLines: 150 });
+  const coordinator = new MicroShardCoordinator({ runtime, patchFabric, shardPlanner: planner });
+  addShardableParent(runtime);
 
   const materialized = coordinator.materialize({ workers: [{ capacity: { freeSlots: 4 } }], verifierSlots: 4, composerSlots: 1, now: 100 });
   assert.equal(materialized.length, 1);
@@ -100,6 +103,43 @@ test('micro-shard coordinator fans out, composes, verifies once, and accepts onl
   const acceptedEvidence = parent.lineage.at(-1).evidence.evidenceBundle;
   assert.equal(acceptedEvidence.payload.evidence.artifacts.commitSha, ACCEPTED);
   assert.equal(patchFabric.list()[0].state, 'ACCEPTED');
+});
+
+test('terminal shard failure fails patch session and parent instead of hanging', () => {
+  const runtime = runtimeHarness();
+  const patchFabric = new PatchFabric();
+  const coordinator = new MicroShardCoordinator({ runtime, patchFabric, shardPlanner: new MicroShardPlanner({ fixedShardOverheadMs: 0, compositionOverheadMs: 0 }) });
+  addShardableParent(runtime, 'terminal-parent');
+  coordinator.materialize({ workers: [{ capacity: { freeSlots: 4 } }], verifierSlots: 4, composerSlots: 1, now: 100 });
+  const shard = runtime.graph.list().find((task) => task.metadata?.patchFabric?.kind === 'shard');
+  runtime.graph.setState(shard.key, TaskState.FAILED, { reason: 'repair budget exhausted' });
+
+  const result = coordinator.reconcile([{ taskKey: shard.key, action: 'TERMINATE' }], { now: 200 });
+  assert.equal(result.failedParents.length, 1);
+  assert.equal(runtime.graph.get('terminal-parent').state, TaskState.FAILED);
+  assert.equal(patchFabric.list()[0].state, 'FAILED');
+  assert.equal(patchFabric.list()[0].failures.at(-1).phase, 'shard');
+});
+
+test('terminal repair failure also fails the owning shard session and parent', () => {
+  const runtime = runtimeHarness();
+  const patchFabric = new PatchFabric();
+  const coordinator = new MicroShardCoordinator({ runtime, patchFabric, shardPlanner: new MicroShardPlanner({ fixedShardOverheadMs: 0, compositionOverheadMs: 0 }) });
+  addShardableParent(runtime, 'repair-parent');
+  coordinator.materialize({ workers: [{ capacity: { freeSlots: 4 } }], verifierSlots: 4, composerSlots: 1, now: 100 });
+  const shard = runtime.graph.list().find((task) => task.metadata?.patchFabric?.kind === 'shard');
+  runtime.graph.setState(shard.key, TaskState.BLOCKED, { reason: 'repair-task-created' });
+  runtime.graph.add({
+    key: `${shard.key}:repair`, repository: shard.repository, objective: 'repair shard', state: TaskState.FAILED,
+    requirements: shard.requirements,
+    metadata: { repairOf: shard.key, execution: { kind: 'coding-agent' } }
+  });
+
+  const result = coordinator.reconcile([{ taskKey: `${shard.key}:repair`, action: 'TERMINATE' }], { now: 250 });
+  assert.equal(result.failedParents.length, 1);
+  assert.equal(runtime.graph.get(shard.key).state, TaskState.FAILED);
+  assert.equal(runtime.graph.get('repair-parent').state, TaskState.FAILED);
+  assert.equal(patchFabric.list()[0].state, 'FAILED');
 });
 
 test('critical-risk parent is not micro-sharded', () => {
