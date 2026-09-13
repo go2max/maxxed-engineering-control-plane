@@ -79,6 +79,18 @@ export class EngineeringOrchestrator {
       const repair = this.graph.get(repairTaskKey);
       if (!repair || repair.metadata?.repairOf !== taskKey) throw new Error('repair task does not belong to blocked task');
       if (repair.state !== TaskState.ACCEPTED) throw new Error('repair task must be accepted before parent may resume');
+      const acceptedRepair = [...(repair.lineage ?? [])].reverse().find((entry) => entry.state === TaskState.ACCEPTED)?.evidence ?? null;
+      if (repair.metadata?.closesParentOnAccept === true) {
+        this.repairs.reset(taskKey);
+        this.graph.setState(taskKey, TaskState.ACCEPTED, {
+          reason: 'accepted coding repair satisfied parent acceptance',
+          repairTaskKey,
+          verification: acceptedRepair?.verification ?? null,
+          evidenceBundle: acceptedRepair?.evidenceBundle ?? null
+        });
+        this.#record({ taskKey, kind: 'repair-gate-accepted', action: 'ACCEPT', relatedTaskKey: repairTaskKey, evidenceDigest: acceptedRepair?.evidenceBundle?.digest ?? null }, now);
+        return this.graph.get(taskKey);
+      }
       this.graph.setState(taskKey, TaskState.READY, { reason: 'accepted repair completed', repairTaskKey });
       this.#record({ taskKey, kind: 'repair-gate-resolved', action: 'READY', relatedTaskKey: repairTaskKey }, now);
       return this.graph.get(taskKey);
