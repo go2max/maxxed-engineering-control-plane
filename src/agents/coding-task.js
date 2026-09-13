@@ -12,7 +12,7 @@ export function compileCodingTask({
   if (!repoPath) throw new Error('repoPath is required');
   if (!objective) throw new Error('objective is required');
   if (!Array.isArray(testCommands)) throw new Error('testCommands must be an array');
-  const branchName = `${branchPrefix}/${slug(key)}`;
+  const branchBase = `${branchPrefix}/${slug(key)}`;
   const requiredChecks = acceptance.requiredChecks ?? testCommands.map((entry, index) => entry.name ?? `test-${index + 1}`);
   const normalizedAcceptance = {
     requiredChecks,
@@ -32,13 +32,13 @@ export function compileCodingTask({
     metadata: {
       priority,
       restartable: true,
-      mutationScopes: [`repo:${repository}`, `branch:${repository}:${branchName}`],
+      mutationScopes: [`repo:${repository}`, `branch-base:${repository}:${branchBase}`],
       acceptance: normalizedAcceptance,
       execution: {
         kind: 'coding-agent',
         repoPath,
         ref,
-        branchName,
+        branchBase,
         goal: objective,
         acceptance: normalizedAcceptance,
         testCommands,
@@ -56,6 +56,8 @@ export function fabricTaskFromDispatch(task, dispatch) {
   const execution = task?.metadata?.execution;
   if (!execution || execution.kind !== 'coding-agent') throw new Error('task is not compiled for coding-agent execution');
   if (!dispatch?.claim?.claimId || !dispatch.workerId) throw new Error('dispatch claim and worker are required');
+  const generation = Number(dispatch.claim.generation ?? 0);
+  const branchName = `${execution.branchBase}-g${generation}`;
   return {
     taskId: dispatch.claim.claimId,
     repository: task.repository,
@@ -65,6 +67,9 @@ export function fabricTaskFromDispatch(task, dispatch) {
     requirements: task.requirements,
     payload: {
       ...execution,
+      branchName,
+      publishAfterLeaseValidation: Boolean(execution.autoPush),
+      autoPush: false,
       controlPlaneTaskKey: task.key,
       controlPlaneClaim: dispatch.claim
     }
