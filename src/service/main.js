@@ -32,6 +32,7 @@ import { TestReliabilityLedger } from '../verification/test-reliability.js';
 import { WorkerPerformanceLedger } from '../scheduler/worker-performance.js';
 import { MicroShardPlanner } from '../patch/shard-planner.js';
 import { PatchFabric } from '../patch/patch-fabric.js';
+import { MicroShardCoordinator } from '../patch/micro-shard-coordinator.js';
 
 const host = process.env.MAXXED_CONTROL_HOST ?? '127.0.0.1';
 const port = Number(process.env.MAXXED_CONTROL_PORT ?? 7790);
@@ -83,13 +84,14 @@ const impactTestSelector = new ImpactTestSelector({ graph: semanticGraph });
 const testReliability = new TestReliabilityLedger();
 const shardPlanner = new MicroShardPlanner();
 const patchFabric = new PatchFabric();
+const microShards = new MicroShardCoordinator({ runtime, patchFabric, shardPlanner });
 const leverageEngine = new LeverageEngine({ cas: solutionCas, graph: semanticGraph, transforms, repairs: repairMemory });
 const leverage = new LeverageRuntimeAdapter({ runtime, engine: leverageEngine, cas: solutionCas, harvester: trajectoryHarvester, repairs: repairMemory });
 const derivedState = new DerivedStateManager({ solutionCas, artifactCache, semanticGraph, trajectoryHarvester, repairMemory });
 const leverageComponents = {
   leverage, solutionCas, artifactCache, artifactStore, semanticGraph, transforms, trajectoryHarvester, repairMemory,
   productFamilies, bottleneckOptimizer, maintenancePlanner, replayProjector, sourceIndexer, codeIndexes, contextCompiler,
-  speculativePlanner, impactTestSelector, testReliability, workerPerformance, shardPlanner, patchFabric, derivedState, leverageEngine
+  speculativePlanner, impactTestSelector, testReliability, workerPerformance, shardPlanner, patchFabric, microShards, derivedState, leverageEngine
 };
 
 const store = new RuntimeStateStore(statePath);
@@ -115,7 +117,7 @@ if (restoredPatch) patchFabric.restore(restoredPatch);
 
 const githubAdapter = githubToken ? new GitHubPullRequestAdapter({ token: githubToken }) : null;
 const promotion = githubAdapter ? new PullRequestPromotion({ runtime, adapter: githubAdapter }) : null;
-const codingLoop = fabricExecutionClient ? new AutonomousCodingLoop({ runtime, fabricClient: fabricExecutionClient, promotion, leverage, workerPerformance, intervalMs: Number(process.env.MAXXED_CODING_LOOP_MS ?? 2_000) }) : null;
+const codingLoop = fabricExecutionClient ? new AutonomousCodingLoop({ runtime, fabricClient: fabricExecutionClient, promotion, leverage, workerPerformance, microShards, intervalMs: Number(process.env.MAXXED_CODING_LOOP_MS ?? 2_000) }) : null;
 const server = createControlPlaneServer({ runtime, adminToken, codingLoop, leverageComponents });
 let saving = false;
 const persist = async () => {
@@ -148,6 +150,7 @@ server.listen(port, host, () => {
   if (codingLoop) {
     codingLoop.start();
     console.log(`autonomous coding loop active at ${runtime.throughput.targetMultiplier}x baseline target`);
+    console.log('Patch Fabric micro-lanes are enabled for exact-SHA tasks with profitable decomposable units.');
     console.log(githubAdapter ? 'accepted coding branches will be promoted to GitHub PRs' : 'GitHub PR promotion disabled: MAXXED_GITHUB_TOKEN is not configured');
   } else console.log('autonomous coding loop disabled: MAXXED_FABRIC_ADMIN_TOKEN is not configured');
 });
