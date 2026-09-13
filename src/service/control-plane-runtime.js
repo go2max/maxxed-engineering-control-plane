@@ -62,7 +62,7 @@ export class ControlPlaneRuntime {
     const previousLimit = this.scheduler.totalLaneLimit;
     this.scheduler.totalLaneLimit = Math.max(1, this.lastThroughputDecision.allowedConcurrency || 1);
     try {
-      const dispatches = this.orchestrator.dispatch(workers, { now, taskPredicate });
+      const dispatches = this.orchestrator.dispatch(workers, { now, taskPredicate, admissionDecision: this.lastThroughputDecision });
       if (dispatches.length) this.journal.append('dispatch.issued', { tasks: dispatches.map((entry) => entry.taskKey), workers: dispatches.map((entry) => entry.workerId), throughput: this.lastThroughputDecision }, now);
       return dispatches;
     } finally {
