@@ -11,6 +11,23 @@ function serializableFiles(files) {
   return Object.fromEntries([...files.entries()].sort(([a], [b]) => a.localeCompare(b)));
 }
 
+function deriveBaseFiles(baseFiles, bundles) {
+  const working = normalizeFiles(baseFiles);
+  for (const bundle of bundles) {
+    for (const write of bundle.writes) {
+      if (write.beforeContent == null) continue;
+      if (working.has(write.path) && working.get(write.path) !== write.beforeContent) {
+        const error = new Error(`conflicting base content for ${write.path}`);
+        error.path = write.path;
+        error.shardKey = bundle.shardKey;
+        throw error;
+      }
+      working.set(write.path, write.beforeContent);
+    }
+  }
+  return working;
+}
+
 export class PatchComposer {
   compose({ baseSha, baseFiles = {}, bundles = [], parentTaskKey = null, now = Date.now() } = {}) {
     if (!/^[0-9a-f]{40}$/i.test(String(baseSha ?? ''))) throw new Error('composer requires exact 40-character baseSha');
@@ -25,8 +42,8 @@ export class PatchComposer {
     }
 
     const byKey = new Map(valid.map((bundle) => [bundle.shardKey ?? bundle.taskKey, bundle]));
-    const original = normalizeFiles(baseFiles);
-    const working = normalizeFiles(baseFiles);
+    const original = deriveBaseFiles(baseFiles, valid);
+    const working = new Map(original);
     const applied = [];
 
     for (const key of graph.order) {
@@ -55,6 +72,7 @@ export class PatchComposer {
     const changedPaths = [...new Set([...original.keys(), ...working.keys()])].filter((file) => original.get(file) !== working.get(file)).sort();
     const writes = changedPaths.map((file) => ({
       path: file,
+      beforeContent: original.has(file) ? original.get(file) : null,
       beforeHash: original.has(file) ? contentHash(original.get(file)) : null,
       afterHash: working.has(file) ? contentHash(working.get(file)) : null,
       delete: !working.has(file),
