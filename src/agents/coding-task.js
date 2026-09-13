@@ -5,7 +5,8 @@ function slug(value) {
 export function compileCodingTask({
   key, repository, repoPath = null, objective, acceptance = {}, testCommands = [], dependencies = [],
   priority = 0, riskClass = 'normal', taskClass = 'standard', ref = 'HEAD', baseBranch = 'main', maxSteps = 24,
-  autoCommit = true, autoPush = true, branchPrefix = 'maxxed/agent', modelRequest = null, microSharding = null
+  autoCommit = true, autoPush = true, branchPrefix = 'maxxed/agent', modelRequest = null, microSharding = null,
+  repositoryExecution = null, allowNetworkedRepositoryExecution = false
 } = {}) {
   if (!key) throw new Error('coding task key is required');
   if (!repository || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(String(repository))) throw new Error('repository must be owner/name');
@@ -13,6 +14,10 @@ export function compileCodingTask({
   if (!objective) throw new Error('objective is required');
   if (!Array.isArray(testCommands)) throw new Error('testCommands must be an array');
   if (microSharding != null && typeof microSharding !== 'object') throw new Error('microSharding must be an object when supplied');
+  const networkMode = repositoryExecution?.networkMode ?? 'none';
+  if (!['none', 'host'].includes(networkMode)) throw new Error('repositoryExecution.networkMode must be none or host');
+  if (networkMode === 'host' && allowNetworkedRepositoryExecution !== true) throw new Error('networked repository execution requires explicit allowNetworkedRepositoryExecution=true');
+  const normalizedRepositoryExecution = { networkMode };
   const branchBase = `${branchPrefix}/${slug(key)}`;
   const requiredChecks = acceptance.requiredChecks ?? testCommands.map((entry, index) => entry.name ?? `test-${index + 1}`);
   const normalizedAcceptance = {
@@ -26,6 +31,8 @@ export function compileCodingTask({
     maxCostPerMillionTokens: 0,
     taskClass: 'coding'
   };
+  const capabilities = ['coding-agent', 'git', 'node'];
+  if (networkMode === 'none') capabilities.push('network-isolated-exec');
   return {
     key,
     repository,
@@ -33,7 +40,7 @@ export function compileCodingTask({
     dependencies,
     riskClass,
     taskClass,
-    requirements: { capabilities: ['coding-agent', 'git', 'node'], minMemoryMb: 2048 },
+    requirements: { capabilities, minMemoryMb: 2048 },
     dedupeKey: `coding:${repository}:${key}`,
     state: 'READY',
     metadata: {
@@ -56,6 +63,7 @@ export function compileCodingTask({
         autoPush: Boolean(autoPush),
         commitMessage: `maxxed: ${String(objective).slice(0, 120)}`,
         taskKey: key,
+        repositoryExecution: normalizedRepositoryExecution,
         ...(microSharding ? { microSharding: structuredClone(microSharding) } : {})
       }
     }
