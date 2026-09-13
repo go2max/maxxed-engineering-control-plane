@@ -19,9 +19,10 @@ import { fabricTaskFromDispatch } from '../agents/coding-task.js';
 import { evidenceFromFabricResult } from './fabric-execution-client.js';
 
 const isCodingTask = (task) => task?.metadata?.execution?.kind === 'coding-agent';
+const terminalFabricStates = new Set(['SUCCEEDED', 'FAILED', 'RECONCILE']);
 
 export class ControlPlaneRuntime {
-  constructor({ workerProvider = async () => [], schedulerOptions = {}, modelDefinitions = [], modelClientFactory = null, fabricExecutionClient = null, throughputOptions = {} } = {}) {
+  constructor({ workerProvider = async () => [], schedulerOptions = {}, modelDefinitions = [], modelClientFactory = null, fabricExecutionClient = null, throughputOptions = {}, fabricParentClaimTtlMs = 30_000 } = {}) {
     this.graph = new TaskGraph(); this.claims = new ClaimAuthority(); this.repairs = new RepairController(); this.verifier = new AcceptanceVerifier();
     this.verificationLedger = new VerificationLedger(); this.policy = new SchedulerPolicy(); this.journal = new EventJournal();
     this.modelRegistry = new ModelRegistry(); this.modelEvals = new ModelEvalLedger(); this.modelGovernor = new ModelRuntimeGovernor();
@@ -33,7 +34,8 @@ export class ControlPlaneRuntime {
     this.scheduler = new PortfolioScheduler({ graph: this.graph, policy: this.policy, ...schedulerOptions });
     this.orchestrator = new EngineeringOrchestrator({ graph: this.graph, scheduler: this.scheduler, claims: this.claims, verifier: this.verifier, repairs: this.repairs, modelRouter: this.modelRouter, verificationLedger: this.verificationLedger });
     this.workerProvider = workerProvider; this.fabricExecutionClient = fabricExecutionClient; this.throughput = new ThroughputGovernor(throughputOptions);
-    this.paused = false; this.restoredAt = null; this.lastModelDiscovery = null; this.lastThroughputDecision = null;
+    this.fabricParentClaimTtlMs = Math.max(5_000, Number(fabricParentClaimTtlMs ?? 30_000));
+    this.paused = false; this.restoredAt = null; this.lastModelDiscovery = null; this.lastThroughputDecision = null; this.lastFabricLeaseReconciliation = null;
   }
 
   ingest(task, { idempotencyKey = null, now = Date.now() } = {}) { return this.journal.once(idempotencyKey, task, () => { const result = this.graph.add(task); this.journal.append('task.ingested', { taskKey: result.key }, now); return result; }); }
@@ -91,15 +93,41 @@ export class ControlPlaneRuntime {
   async reconcileFabric(now = Date.now()) {
     if (!this.fabricExecutionClient) throw new Error('fabric execution client is not configured');
     const fleet = await this.fabricExecutionClient.fleet();
+    const activeFabricLeases = new Map((fleet.leases ?? [])
+      .filter((lease) => lease?.taskId && Number(lease.expiresAt) > now)
+      .map((lease) => [lease.taskId, lease]));
     const reconciled = [];
+    const renewed = [];
+    const staleDelegations = [];
+
     for (const fabricTask of fleet.tasks ?? []) {
-      if (!['SUCCEEDED', 'FAILED', 'RECONCILE'].includes(fabricTask.state)) continue;
       const taskKey = fabricTask.payload?.controlPlaneTaskKey;
       if (!taskKey) continue;
       const task = this.graph.get(taskKey);
       if (!task || task.state !== TaskState.CLAIMED) continue;
       const claim = fabricTask.payload?.controlPlaneClaim;
-      if (!claim || !this.claims.validate(claim, now)) continue;
+      if (!claim) continue;
+
+      if (!terminalFabricStates.has(fabricTask.state)) {
+        if (!this.claims.validate(claim, now)) {
+          this.claims.fence(taskKey);
+          this.graph.setState(taskKey, TaskState.BLOCKED, {
+            reason: 'delegated fabric task outlived parent claim; reconciliation required',
+            fabricTaskId: fabricTask.taskId,
+            fabricState: fabricTask.state
+          });
+          staleDelegations.push({ taskKey, fabricTaskId: fabricTask.taskId, fabricState: fabricTask.state });
+          continue;
+        }
+        const fabricLease = activeFabricLeases.get(fabricTask.taskId);
+        if (fabricTask.state === 'LEASED' && fabricLease) {
+          const parent = this.claims.renew(claim, this.fabricParentClaimTtlMs, now);
+          if (parent) renewed.push({ taskKey, fabricTaskId: fabricTask.taskId, fabricWorkerId: fabricLease.workerId, fabricGeneration: fabricLease.generation, parentExpiresAt: parent.expiresAt });
+        }
+        continue;
+      }
+
+      if (!this.claims.validate(claim, now)) continue;
 
       if (fabricTask.state === 'RECONCILE') {
         this.claims.release(claim);
@@ -128,6 +156,9 @@ export class ControlPlaneRuntime {
       }
       reconciled.push({ taskKey, action: result.decision?.action ?? null, fabricTaskId: fabricTask.taskId, branchName: evidence.artifacts?.branchName ?? null, commitSha: evidence.artifacts?.commitSha ?? null, parentTaskKey, parentState });
     }
+    this.lastFabricLeaseReconciliation = { at: now, renewed: renewed.length, staleDelegations: staleDelegations.length, activeFabricLeases: activeFabricLeases.size };
+    if (renewed.length) this.journal.append('fabric.parent-claims.renewed', { claims: renewed }, now);
+    if (staleDelegations.length) this.journal.append('fabric.parent-claims.stale', { delegations: staleDelegations }, now);
     if (reconciled.length) this.journal.append('fabric.results.reconciled', { results: reconciled }, now);
     return reconciled;
   }
@@ -183,7 +214,7 @@ export class ControlPlaneRuntime {
 
   status() {
     const tasks = this.graph.list(); const claims = this.claims.list(); const stateCounts = Object.fromEntries([...new Set(tasks.map((task) => task.state))].sort().map((state) => [state, tasks.filter((task) => task.state === state).length])); const registeredModels = this.modelRegistry.list();
-    return { paused: this.paused, readiness: this.readiness(), tasks: { total: tasks.length, byState: stateCounts, executable: this.graph.frontier().length }, claims: { active: claims.length }, verification: { records: this.verificationLedger.entries.length, sequence: this.verificationLedger.sequence }, models: { registered: registeredModels.length, healthy: registeredModels.filter((model) => model.healthy && model.enabled).length, runtime: this.modelGovernor.list(), evals: this.modelEvals.list(), fabricDiscovery: this.lastModelDiscovery }, scheduler: { repositoryLaneLimits: { ...this.scheduler.repoLaneLimits }, policy: this.policy.status(), throughput: this.lastThroughputDecision } };
+    return { paused: this.paused, readiness: this.readiness(), tasks: { total: tasks.length, byState: stateCounts, executable: this.graph.frontier().length }, claims: { active: claims.length }, verification: { records: this.verificationLedger.entries.length, sequence: this.verificationLedger.sequence }, models: { registered: registeredModels.length, healthy: registeredModels.filter((model) => model.healthy && model.enabled).length, runtime: this.modelGovernor.list(), evals: this.modelEvals.list(), fabricDiscovery: this.lastModelDiscovery }, scheduler: { repositoryLaneLimits: { ...this.scheduler.repoLaneLimits }, policy: this.policy.status(), throughput: this.lastThroughputDecision }, fabric: { leaseReconciliation: this.lastFabricLeaseReconciliation } };
   }
 
   snapshot() { return { version: 6, core: snapshotRuntime({ graph: this.graph, claims: this.claims, repairs: this.repairs }), policy: this.policy.snapshot(), journal: this.journal.snapshot(), verification: this.verificationLedger.snapshot(), models: { governor: this.modelGovernor.snapshot(), evals: this.modelEvals.snapshot(), lastDiscovery: this.lastModelDiscovery }, paused: this.paused, repositoryLaneLimits: { ...this.scheduler.repoLaneLimits } }; }
