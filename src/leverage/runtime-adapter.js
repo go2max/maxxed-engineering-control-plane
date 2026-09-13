@@ -8,13 +8,20 @@ function immutableSourceFingerprint(task, environment) {
   return /^[0-9a-f]{40}$/i.test(ref) ? ref : null;
 }
 
+function precomputedWrites(before = [], after = []) {
+  const original = new Map(before.map((file) => [String(file.path), String(file.content ?? '')]));
+  return after
+    .filter((file) => original.get(String(file.path)) !== String(file.content ?? ''))
+    .map((file) => ({ path: String(file.path), content: String(file.content ?? '') }));
+}
+
 export class LeverageRuntimeAdapter {
   constructor({ runtime, engine, cas, harvester, repairs = null } = {}) {
     if (!runtime || !engine || !cas || !harvester) throw new Error('runtime, engine, cas and harvester are required');
     this.runtime = runtime; this.engine = engine; this.cas = cas; this.harvester = harvester; this.repairs = repairs;
   }
 
-  prepareCodingTask(task, { normalizedSpec = null, dependencySeeds = [], context = {}, environment = null, policyVersion = '1' } = {}) {
+  async prepareCodingTask(task, { normalizedSpec = null, dependencySeeds = [], context = {}, environment = null, policyVersion = '1' } = {}) {
     const sourceFingerprint = immutableSourceFingerprint(task, environment);
     const normalizedEnvironment = { ...(environment ?? {}), sourceFingerprint };
     const spec = normalizedSpec ?? { repository: task.repository, objective: task.objective, acceptance: task.metadata?.acceptance ?? {}, execution: { baseBranch: task.metadata?.execution?.baseBranch ?? 'main', ref: sourceFingerprint ?? task.metadata?.execution?.ref ?? 'HEAD' } };
@@ -27,6 +34,27 @@ export class LeverageRuntimeAdapter {
       this.runtime.journal.append('leverage.exact-reuse', { taskKey: task.key, solutionKey: plan.solutionKey, sourceFingerprint });
       return { task: this.runtime.graph.get(task.key), plan, reused: true };
     }
+
+    if (plan.strategy === LeverageStrategy.DETERMINISTIC_TRANSFORM && sourceFingerprint && Array.isArray(context.files)) {
+      const transformed = await this.engine.executeTransform(plan, context);
+      const writes = precomputedWrites(context.files, transformed.result?.files ?? []);
+      task.metadata.execution = {
+        ...(task.metadata.execution ?? {}),
+        ref: sourceFingerprint,
+        transformId: plan.transformId,
+        precomputedWrites: writes
+      };
+      delete task.metadata.modelRequest;
+      task.metadata.leverage = {
+        ...task.metadata.leverage,
+        deterministicKey: transformed.deterministicKey,
+        transformOutputDigest: transformed.outputDigest,
+        precomputedWriteCount: writes.length,
+        modelFreeExecution: true
+      };
+      this.runtime.journal.append('leverage.transform-materialized', { taskKey: task.key, transformId: plan.transformId, deterministicKey: transformed.deterministicKey, writeCount: writes.length, sourceFingerprint });
+    }
+
     return { task, plan, reused: false };
   }
 
