@@ -81,8 +81,8 @@ export class AutonomousCodingLoop {
     this.running = true;
     const now = this.now();
     try {
-      this.runtime.recoverExpired(now);
       const reconciled = await this.runtime.reconcileFabric(now);
+      this.runtime.recoverExpired(now);
       const patchReconciliation = this.microShards ? this.microShards.reconcile(reconciled, { now }) : { submitted: [], composed: [], acceptedParents: [], failedParents: [] };
       const harvested = [...this.#harvest(reconciled, now), ...this.#harvestPatchParents(patchReconciliation, now)];
       const promoted = this.promotion ? await this.promotion.sync(now) : [];
