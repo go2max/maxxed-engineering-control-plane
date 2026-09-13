@@ -4,6 +4,17 @@ import { defaultSecretScanner } from '../security/secret-scanner.js';
 function hash(value) { return createHash('sha256').update(String(value ?? '')).digest('hex'); }
 function normalizeText(value) { return String(value ?? '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().replace(/\s+/g, ' '); }
 function semanticSignature(row) { return hash(`${row.repository ?? ''}|${row.taskClass ?? ''}|${normalizeText(row.objective)}|${normalizeText(JSON.stringify(row.acceptance ?? {}))}`); }
+function normalizeRestoredRecord(row) {
+  const normalized = { schemaVersion: Number(row.schemaVersion ?? 1), sourceRefs: [...new Set((row.sourceRefs ?? []).map(String))].sort(), revoked: Boolean(row.revoked), revokedReason: row.revokedReason ?? null, redactionFindings: [...(row.redactionFindings ?? [])], ...structuredClone(row) };
+  normalized.schemaVersion = 2;
+  normalized.sourceRefs = [...new Set((normalized.sourceRefs ?? []).map(String))].sort();
+  normalized.revoked = Boolean(normalized.revoked);
+  normalized.revokedReason ??= null;
+  normalized.redactionFindings ??= [];
+  normalized.semanticSignature ||= semanticSignature(normalized);
+  normalized.id ||= hash(`${normalized.taskKey}:${normalized.outcome}:${normalized.semanticSignature}`);
+  return normalized;
+}
 
 export class TrajectoryHarvester {
   constructor({ maxRecords = 50_000, scanner = defaultSecretScanner } = {}) {
@@ -65,6 +76,7 @@ export class TrajectoryHarvester {
   heldOutEvalRows({ ratio = 0.15 } = {}) {
     const active = this.records.filter((row) => !row.revoked).sort((a, b) => a.semanticSignature.localeCompare(b.semanticSignature));
     const signatures = [...new Set(active.map((row) => row.semanticSignature))];
+    if (!signatures.length) return [];
     const evalCount = Math.max(1, Math.floor(signatures.length * Math.max(0, Math.min(0.5, Number(ratio)))));
     const evalSignatures = new Set(signatures.slice(-evalCount));
     return active.filter((row) => evalSignatures.has(row.semanticSignature)).map((row) => ({
@@ -103,7 +115,7 @@ export class TrajectoryHarvester {
   snapshot() { return { version: 2, maxRecords: this.maxRecords, records: structuredClone(this.records), revocations: [...this.revocations.values()].map((row) => structuredClone(row)) }; }
   restore(snapshot) {
     this.maxRecords = Math.max(1, Number(snapshot?.maxRecords ?? this.maxRecords));
-    this.records = structuredClone(snapshot?.records ?? []).slice(-this.maxRecords);
+    this.records = (snapshot?.records ?? []).map(normalizeRestoredRecord).slice(-this.maxRecords);
     this.revocations = new Map((snapshot?.revocations ?? []).map((row) => [row.sourceRef, structuredClone(row)]));
     for (const [sourceRef, row] of this.revocations) for (const record of this.records) if ((record.sourceRefs ?? []).includes(sourceRef)) { record.revoked = true; record.revokedReason = row.reason; }
   }
