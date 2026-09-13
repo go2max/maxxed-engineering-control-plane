@@ -49,7 +49,9 @@ export function evidenceFromFabricResult(task, fabricTask) {
       commitSha: result.commitSha ?? null,
       pushed: Boolean(result.pushed),
       diff: result.diff ?? '',
-      summary: result.summary ?? ''
+      summary: result.summary ?? '',
+      durationMs: result.durationMs ?? null,
+      patchBundle: result.patchBundle ? structuredClone(result.patchBundle) : null
     },
     execution: result.evidence ?? [],
     taskKey: task.key
