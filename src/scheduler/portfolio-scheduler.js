@@ -59,7 +59,7 @@ export class PortfolioScheduler {
 
   plan(workers, options = {}) { return this.planWithReport(workers, options).dispatches; }
 
-  planWithReport(workers, { now = Date.now(), activeClaims = [] } = {}) {
+  planWithReport(workers, { now = Date.now(), activeClaims = [], taskPredicate = () => true } = {}) {
     const originalClaims = structuredClone(activeClaims);
     const repoUsage = new Map();
     for (const claim of activeClaims) if (claim.repository) repoUsage.set(claim.repository, (repoUsage.get(claim.repository) ?? 0) + 1);
@@ -68,7 +68,7 @@ export class PortfolioScheduler {
     const adaptiveLimit = adaptiveLaneCapacity(workers, this.totalLaneLimit);
     const remainingLaneBudget = Math.max(0, adaptiveLimit - activeClaims.length);
     const policyBackpressure = [];
-    const candidates = this.graph.frontier().flatMap((task) => {
+    const candidates = this.graph.frontier(taskPredicate).flatMap((task) => {
       const policy = this.policy?.evaluate(task, now) ?? { allowed: true, priorityAdjustment: 0, deadlineUrgency: 0, override: null };
       if (!policy.allowed) {
         policyBackpressure.push({ taskKey: task.key, repository: task.repository, reason: policy.reason });
