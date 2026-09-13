@@ -45,7 +45,7 @@ export class SaasWebFactory {
       run.failures.push({ stage, evidence: structuredClone(evidence) });
       return structuredClone(run);
     }
-    if (stage === WebFactoryStage.SPEC && evidence?.requirementsHash && evidence.requirementsHash !== run.specDigest) {
+    if (stage === WebFactoryStage.SPEC && /^[a-f0-9]{64}$/i.test(String(evidence?.requirementsHash ?? '')) && evidence.requirementsHash !== run.specDigest) {
       throw new Error('SPEC evidence requirementsHash does not match canonical spec digest');
     }
     run.stageIndex += 1;
