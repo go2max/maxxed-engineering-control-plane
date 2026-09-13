@@ -4,9 +4,9 @@ import { fabricTaskFromDispatch } from '../agents/coding-task.js';
 const isCodingTask = (task) => task?.metadata?.execution?.kind === 'coding-agent';
 
 export class AutonomousCodingLoop {
-  constructor({ runtime, fabricClient, intervalMs = 2_000, now = () => Date.now() } = {}) {
+  constructor({ runtime, fabricClient, promotion = null, intervalMs = 2_000, now = () => Date.now() } = {}) {
     if (!runtime || !fabricClient) throw new Error('runtime and fabricClient are required');
-    this.runtime = runtime; this.fabric = fabricClient; this.intervalMs = Math.max(500, Number(intervalMs)); this.now = now;
+    this.runtime = runtime; this.fabric = fabricClient; this.promotion = promotion; this.intervalMs = Math.max(500, Number(intervalMs)); this.now = now;
     this.timer = null; this.running = false; this.lastTick = null;
   }
 
@@ -28,6 +28,7 @@ export class AutonomousCodingLoop {
     try {
       this.runtime.recoverExpired(now);
       const reconciled = await this.runtime.reconcileFabric(now);
+      const promoted = this.promotion ? await this.promotion.sync(now) : [];
       const workers = await this.runtime.workerProvider();
       this.runtime.reconcileModels(workers, now);
 
@@ -58,7 +59,7 @@ export class AutonomousCodingLoop {
           this.runtime.journal.append('coding.task.submit-failed', { taskKey: task.key, error: error.message }, now);
         }
       }
-      this.lastTick = { at: now, reconciled, submitted, throughput };
+      this.lastTick = { at: now, reconciled, promoted, submitted, throughput };
       return structuredClone(this.lastTick);
     } finally { this.running = false; }
   }
