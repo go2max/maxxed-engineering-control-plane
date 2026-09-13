@@ -14,9 +14,17 @@ export function snapshotRuntime({ graph, claims, repairs }) {
 export function restoreRuntime(snapshot, { graph, claims, repairs, now = Date.now() }) {
   if (!snapshot || snapshot.version !== 1) throw new Error('unsupported runtime snapshot');
   claims.restore(snapshot.claims);
+  const expiredClaims = claims.sweepExpired(now);
+  const activeClaimTaskKeys = new Set(claims.list().map((claim) => claim.taskKey));
+  const expiredClaimTaskKeys = new Set(expiredClaims.map((claim) => claim.taskKey));
   repairs.restore(snapshot.repairs);
-  graph.restore(snapshot.graph, now);
-  return { restoredAt: now, taskCount: graph.list().length, activeClaims: claims.list().length };
+  graph.restore(snapshot.graph, now, { activeClaimTaskKeys, expiredClaimTaskKeys });
+  return {
+    restoredAt: now,
+    taskCount: graph.list().length,
+    activeClaims: claims.list().length,
+    expiredClaims: expiredClaims.length
+  };
 }
 
 export class RuntimeStateStore {
