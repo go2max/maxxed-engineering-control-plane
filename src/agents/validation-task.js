@@ -74,7 +74,7 @@ export function compileValidationTask({
       ...(step.env ? { env: structuredClone(step.env) } : {})
     };
   });
-  const capabilities = [...new Set(['git', ...normalizedSteps.map((step) => capabilityFor(step.command)), ...(requirements.capabilities ?? [])])];
+  const capabilities = [...new Set(['validation-agent', 'git', ...normalizedSteps.map((step) => capabilityFor(step.command)), ...(requirements.capabilities ?? [])])];
   const requiredChecks = normalizedSteps.map((step) => step.name);
   return {
     key: String(key),
