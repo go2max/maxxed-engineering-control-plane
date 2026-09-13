@@ -20,6 +20,9 @@ import { ProductFamilyPlanner } from '../leverage/product-family-planner.js';
 import { BottleneckOptimizer } from '../leverage/bottleneck-optimizer.js';
 import { MaintenancePlanner } from '../leverage/maintenance-planner.js';
 import { defaultControlPlaneReplayProjector } from '../leverage/execution-replay.js';
+import { SourceIndexer } from '../leverage/source-indexer.js';
+import { ContextCompiler } from '../leverage/context-compiler.js';
+import { SpeculativePlanner } from '../leverage/speculative-planner.js';
 
 const host = process.env.MAXXED_CONTROL_HOST ?? '127.0.0.1';
 const port = Number(process.env.MAXXED_CONTROL_PORT ?? 7790);
@@ -56,9 +59,12 @@ const productFamilies = new ProductFamilyPlanner();
 const bottleneckOptimizer = new BottleneckOptimizer();
 const maintenancePlanner = new MaintenancePlanner();
 const replayProjector = defaultControlPlaneReplayProjector();
+const sourceIndexer = new SourceIndexer({ graph: semanticGraph });
+const contextCompiler = new ContextCompiler({ graph: semanticGraph, cas: solutionCas, repairs: repairMemory });
+const speculativePlanner = new SpeculativePlanner({ maxCandidates: Number(process.env.MAXXED_SPECULATIVE_MAX_CANDIDATES ?? 4) });
 const leverageEngine = new LeverageEngine({ cas: solutionCas, graph: semanticGraph, transforms, repairs: repairMemory });
 const leverage = new LeverageRuntimeAdapter({ runtime, engine: leverageEngine, cas: solutionCas, harvester: trajectoryHarvester, repairs: repairMemory });
-const leverageComponents = { leverage, solutionCas, artifactCache, semanticGraph, transforms, trajectoryHarvester, repairMemory, productFamilies, bottleneckOptimizer, maintenancePlanner, replayProjector, leverageEngine };
+const leverageComponents = { leverage, solutionCas, artifactCache, semanticGraph, transforms, trajectoryHarvester, repairMemory, productFamilies, bottleneckOptimizer, maintenancePlanner, replayProjector, sourceIndexer, contextCompiler, speculativePlanner, leverageEngine };
 
 const store = new RuntimeStateStore(statePath);
 const leverageStore = new RuntimeStateStore(leverageStatePath);
