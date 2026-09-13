@@ -52,14 +52,17 @@ export function createControlPlaneServer({ runtime, adminToken, codingLoop = nul
       if (req.method === 'GET' && url.pathname === '/models') return send(res, 200, { models: runtime.status().models });
       if (req.method === 'GET' && url.pathname === '/coding/status') return send(res, 200, { enabled: Boolean(codingLoop), running: Boolean(codingLoop?.running), lastTick: codingLoop?.lastTick ?? null, throughput: runtime.lastThroughputDecision });
       if (req.method === 'GET' && url.pathname === '/leverage/status') return send(res, 200, leverage ? {
-        ...leverage.status(),
-        artifactCache: leverageComponents.artifactCache.entries.size,
-        graphNodes: leverageComponents.semanticGraph.nodes.size,
-        graphEdges: leverageComponents.semanticGraph.edges.size,
-        transforms: leverageComponents.transforms.manifest(),
-        repairFingerprints: leverageComponents.repairMemory.byFingerprint.size,
+        ...leverage.status(), artifactCache: leverageComponents.artifactCache.entries.size,
+        graphNodes: leverageComponents.semanticGraph.nodes.size, graphEdges: leverageComponents.semanticGraph.edges.size,
+        transforms: leverageComponents.transforms.manifest(), repairFingerprints: leverageComponents.repairMemory.byFingerprint.size,
         productFamilies: leverageComponents.productFamilies.baselines.size
       } : { enabled: false });
+      if (req.method === 'GET' && url.pathname === '/leverage/training') {
+        if (!leverageComponents) return send(res, 503, { error: 'leverage fabric is not configured' });
+        const acceptedOnly = url.searchParams.get('acceptedOnly') === 'true';
+        const limit = Math.max(1, Math.min(5000, Number(url.searchParams.get('limit') ?? 500)));
+        return send(res, 200, { rows: leverageComponents.trajectoryHarvester.trainingRows({ acceptedOnly }).slice(-limit), preferences: leverageComponents.trajectoryHarvester.preferencePairs().slice(-limit) });
+      }
       if (req.method === 'GET' && url.pathname === '/events') {
         const afterSequence = Number(url.searchParams.get('afterSequence') ?? 0);
         const limit = Number(url.searchParams.get('limit') ?? 200);
@@ -88,6 +91,18 @@ export function createControlPlaneServer({ runtime, adminToken, codingLoop = nul
       if (req.method === 'POST' && url.pathname === '/leverage/plan') {
         if (!leverageComponents) return send(res, 503, { error: 'leverage fabric is not configured' });
         return send(res, 200, leverageComponents.leverageEngine.plan(await readJson(req)));
+      }
+      if (req.method === 'POST' && url.pathname === '/leverage/index') {
+        if (!leverageComponents) return send(res, 503, { error: 'leverage fabric is not configured' });
+        return send(res, 200, leverageComponents.sourceIndexer.index(await readJson(req)));
+      }
+      if (req.method === 'POST' && url.pathname === '/leverage/context') {
+        if (!leverageComponents) return send(res, 503, { error: 'leverage fabric is not configured' });
+        return send(res, 200, leverageComponents.contextCompiler.compile(await readJson(req)));
+      }
+      if (req.method === 'POST' && url.pathname === '/leverage/speculative') {
+        if (!leverageComponents) return send(res, 503, { error: 'leverage fabric is not configured' });
+        return send(res, 200, leverageComponents.speculativePlanner.plan(await readJson(req)));
       }
       if (req.method === 'POST' && url.pathname === '/leverage/graph/nodes') {
         if (!leverageComponents) return send(res, 503, { error: 'leverage fabric is not configured' });
@@ -136,6 +151,7 @@ export function createControlPlaneServer({ runtime, adminToken, codingLoop = nul
         if (!leverageComponents) return send(res, 503, { error: 'leverage fabric is not configured' });
         const body = await readJson(req); return send(res, 200, leverageComponents.replayProjector.replay(body.events ?? runtime.journal.list({ limit: 10000 }), body.seed ?? {}));
       }
+
       if (req.method === 'POST' && url.pathname === '/dispatch') return send(res, 200, { dispatches: await runtime.dispatch() });
       if (req.method === 'POST' && url.pathname === '/results') {
         const body = await readJson(req);
