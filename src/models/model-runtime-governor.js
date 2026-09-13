@@ -93,6 +93,22 @@ export class ModelRuntimeGovernor {
     return Math.max(0, value.maxConcurrency - value.inFlight);
   }
 
+  snapshot() {
+    return {
+      version: 1,
+      failureThreshold: this.failureThreshold,
+      cooldownMs: this.cooldownMs,
+      state: [...this.state.entries()].map(([id, value]) => [id, { ...value, inFlight: 0 }])
+    };
+  }
+
+  restore(snapshot, now = Date.now()) {
+    if (!snapshot || snapshot.version !== 1) throw new Error('unsupported model runtime snapshot');
+    this.failureThreshold = Number(snapshot.failureThreshold ?? this.failureThreshold);
+    this.cooldownMs = Number(snapshot.cooldownMs ?? this.cooldownMs);
+    this.state = new Map((snapshot.state ?? []).map(([id, value]) => [id, { ...structuredClone(value), inFlight: 0, circuitOpenUntil: Number(value.circuitOpenUntil ?? 0) > now ? Number(value.circuitOpenUntil) : 0 }]));
+  }
+
   get(modelId) { const value = this.state.get(modelId); return value ? structuredClone(value) : null; }
   list() { return [...this.state.values()].map((value) => structuredClone(value)); }
 
