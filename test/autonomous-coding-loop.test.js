@@ -55,10 +55,7 @@ test('temporary lane limit is restored when scheduler dispatch throws', async ()
 
 test('fabric success reconciles through acceptance and records branch evidence', async () => {
   let terminal = [];
-  const fabric = {
-    enqueue: async (task) => task,
-    fleet: async () => ({ tasks: terminal })
-  };
+  const fabric = { enqueue: async (task) => task, fleet: async () => ({ tasks: terminal }) };
   const runtime = new ControlPlaneRuntime({ workerProvider: async () => [worker('w1', 1)], fabricExecutionClient: fabric, throughputOptions: { baselineConcurrency: 1, targetMultiplier: 2 } });
   runtime.ingest(compileCodingTask({ key: 'code-1', repository: 'r1', repoPath: '/repo1', objective: 'one', acceptance: { requiredChecks: ['unit'] } }));
   const loop = new AutonomousCodingLoop({ runtime, fabricClient: fabric, now: () => 1000 });
@@ -67,17 +64,42 @@ test('fabric success reconciles through acceptance and records branch evidence',
   const controlTask = runtime.graph.get('code-1');
   const claimLineage = controlTask.lineage.at(-1).evidence;
   const claim = runtime.claims.list()[0];
-  terminal = [{
-    taskId: fabricTask.fabricTaskId,
-    state: 'SUCCEEDED',
-    preferredWorkerId: 'w1',
-    updatedAt: 1001,
-    payload: { controlPlaneTaskKey: 'code-1', controlPlaneClaim: claim },
-    result: { checks: { unit: { ok: true } }, branchName: 'maxxed/agent/code-1-g1', commitSha: 'abc123', pushed: true, summary: 'done', evidence: [] }
-  }];
+  terminal = [{ taskId: fabricTask.fabricTaskId, state: 'SUCCEEDED', preferredWorkerId: 'w1', updatedAt: 1001, payload: { controlPlaneTaskKey: 'code-1', controlPlaneClaim: claim }, result: { checks: { unit: { ok: true } }, branchName: 'maxxed/agent/code-1-g1', commitSha: 'abc123', pushed: true, summary: 'done', evidence: [] } }];
   assert.equal(Boolean(claimLineage.claimId), true);
   const reconciled = await runtime.reconcileFabric(1001);
   assert.equal(reconciled[0].action, 'ACCEPT');
   assert.equal(reconciled[0].branchName, 'maxxed/agent/code-1-g1');
   assert.equal(runtime.graph.get('code-1').state, 'ACCEPTED');
+});
+
+test('accepted coding repair automatically accepts parent with repair evidence', async () => {
+  let terminal = [];
+  const fabric = { enqueue: async (task) => task, fleet: async () => ({ tasks: terminal }) };
+  const runtime = new ControlPlaneRuntime({ workerProvider: async () => [worker('w1', 1)], fabricExecutionClient: fabric, throughputOptions: { baselineConcurrency: 1, targetMultiplier: 2 } });
+  runtime.ingest(compileCodingTask({ key: 'code-repair', repository: 'r1', repoPath: '/repo1', objective: 'fix unit', acceptance: { requiredChecks: ['unit'] }, testCommands: [{ name: 'unit', command: 'npm', args: ['test'] }] }));
+
+  const firstDispatch = await runtime.dispatchToFabric(1000);
+  const originalClaim = runtime.claims.list()[0];
+  terminal = [{ taskId: firstDispatch[0].fabricTask.taskId, state: 'SUCCEEDED', preferredWorkerId: 'w1', updatedAt: 1001, payload: { controlPlaneTaskKey: 'code-repair', controlPlaneClaim: originalClaim }, result: { checks: { unit: { ok: false, class: 'TEST_FAILURE' } }, branchName: 'maxxed/agent/code-repair-g1', commitSha: 'bad111', pushed: true, evidence: [] } }];
+  const failed = await runtime.reconcileFabric(1001);
+  assert.equal(failed[0].action, 'RETRY_REPAIR');
+  assert.equal(runtime.graph.get('code-repair').state, 'BLOCKED');
+  const repair = runtime.graph.list().find((task) => task.metadata?.repairOf === 'code-repair');
+  assert.ok(repair);
+  assert.equal(repair.metadata.closesParentOnAccept, true);
+  assert.equal(repair.metadata.execution.ref, 'bad111');
+
+  terminal = [];
+  const repairDispatch = await runtime.dispatchToFabric(1002);
+  const repairClaim = runtime.claims.list().find((claim) => claim.taskKey === repair.key);
+  terminal = [{ taskId: repairDispatch[0].fabricTask.taskId, state: 'SUCCEEDED', preferredWorkerId: 'w1', updatedAt: 1003, payload: { controlPlaneTaskKey: repair.key, controlPlaneClaim: repairClaim }, result: { checks: { unit: { ok: true } }, branchName: 'maxxed/agent/code-repair-repair-1-g1', commitSha: 'good222', pushed: true, evidence: [] } }];
+  const repaired = await runtime.reconcileFabric(1003);
+  assert.equal(repaired[0].action, 'ACCEPT');
+  assert.equal(repaired[0].parentTaskKey, 'code-repair');
+  assert.equal(repaired[0].parentState, 'ACCEPTED');
+  const parent = runtime.graph.get('code-repair');
+  assert.equal(parent.state, 'ACCEPTED');
+  const accepted = parent.lineage.at(-1).evidence.evidenceBundle.payload.evidence.artifacts;
+  assert.equal(accepted.commitSha, 'good222');
+  assert.equal(accepted.branchName, 'maxxed/agent/code-repair-repair-1-g1');
 });
