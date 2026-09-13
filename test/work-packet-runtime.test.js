@@ -2,7 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { TaskGraph } from '../src/core/task-graph.js';
 import { ClaimAuthority } from '../src/core/claim-authority.js';
+import { EngineeringOrchestrator } from '../src/core/orchestrator.js';
 import { PortfolioScheduler } from '../src/scheduler/portfolio-scheduler.js';
+import { AcceptanceVerifier } from '../src/verification/verifier.js';
+import { RepairController } from '../src/verification/repair-controller.js';
 import { workPacketView } from '../src/scheduler/work-packet-adapter.js';
 
 function worker(workerId) {
@@ -58,4 +61,40 @@ test('packet scope prevents a second claim even if scheduler admission is bypass
   const second = claims.claim({ taskKey: 'repo#2', ownerId: 'w2', scopes: ['repo:repo', 'packet:packet-repo-1_repo-2'] }, 0);
   assert.ok(first);
   assert.equal(second, null);
+});
+
+test('explicit disjoint mutation scopes unlock safe same-repository parallelism', () => {
+  const graph = new TaskGraph();
+  graph.add({ key: 'a', repository: 'repo', metadata: { mutationScopes: ['src/a'] } });
+  graph.add({ key: 'b', repository: 'repo', metadata: { mutationScopes: ['src/b'] } });
+  const claims = new ClaimAuthority();
+  const scheduler = new PortfolioScheduler({ graph, repoLaneLimit: 4, totalLaneLimit: 4 });
+  const orchestrator = new EngineeringOrchestrator({ graph, scheduler, claims, verifier: new AcceptanceVerifier(), repairs: new RepairController() });
+  const dispatches = orchestrator.dispatch([worker('w1'), worker('w2')], { now: 100 });
+  assert.equal(dispatches.length, 2);
+  assert.deepEqual(claims.list().map((claim) => claim.scopes).sort(), [['repo:repo:src/a'], ['repo:repo:src/b']]);
+});
+
+test('tasks without explicit mutation scopes retain whole-repository fail-safe locking', () => {
+  const graph = new TaskGraph();
+  graph.add({ key: 'a', repository: 'repo' });
+  graph.add({ key: 'b', repository: 'repo' });
+  const claims = new ClaimAuthority();
+  const scheduler = new PortfolioScheduler({ graph, repoLaneLimit: 4, totalLaneLimit: 4 });
+  const orchestrator = new EngineeringOrchestrator({ graph, scheduler, claims, verifier: new AcceptanceVerifier(), repairs: new RepairController() });
+  const dispatches = orchestrator.dispatch([worker('w1'), worker('w2')], { now: 100 });
+  assert.equal(dispatches.length, 1);
+  assert.deepEqual(claims.list()[0].scopes, ['repo:repo']);
+});
+
+test('deployment work is globally serialized while non-deployment lanes remain independent', () => {
+  const graph = new TaskGraph();
+  graph.add({ key: 'deploy-a', repository: 'a', taskClass: 'deployment', metadata: { priority: 10 } });
+  graph.add({ key: 'deploy-b', repository: 'b', taskClass: 'deployment', metadata: { priority: 9 } });
+  graph.add({ key: 'verify', repository: 'c', taskClass: 'validation', metadata: { priority: 8 } });
+  const scheduler = new PortfolioScheduler({ graph, repoLaneLimit: 4, totalLaneLimit: 4 });
+  const report = scheduler.planWithReport([worker('w1'), worker('w2'), worker('w3')], { now: 100 });
+  assert.equal(report.dispatches.filter((row) => row.explanation.stage === 'DEPLOYMENT').length, 1);
+  assert.equal(report.dispatches.some((row) => row.taskKey === 'verify'), true);
+  assert.equal(report.backpressure.some((row) => row.reason === 'deployment-serialized'), true);
 });
