@@ -1,6 +1,7 @@
 import { criticalPathScore, portfolioFairnessPenalty } from './critical-path.js';
 import { rebalanceRecommendations } from './scheduler-policy.js';
 import { buildDispatchAudit, workerSuitability } from './dispatch-audit.js';
+import { stageAllowed, taskStage } from './task-stage.js';
 
 function requirementMatch(worker, task) {
   const req = task.requirements ?? {};
@@ -60,7 +61,7 @@ export class PortfolioScheduler {
 
   plan(workers, options = {}) { return this.planWithReport(workers, options).dispatches; }
 
-  planWithReport(workers, { now = Date.now(), activeClaims = [], taskPredicate = () => true } = {}) {
+  planWithReport(workers, { now = Date.now(), activeClaims = [], taskPredicate = () => true, admissionDecision = {} } = {}) {
     const originalClaims = structuredClone(activeClaims);
     const repoUsage = new Map();
     for (const claim of activeClaims) if (claim.repository) repoUsage.set(claim.repository, (repoUsage.get(claim.repository) ?? 0) + 1);
@@ -70,26 +71,31 @@ export class PortfolioScheduler {
     const remainingLaneBudget = Math.max(0, adaptiveLimit - activeClaims.length);
     const policyBackpressure = [];
     const candidates = this.graph.frontier(taskPredicate).flatMap((task) => {
-      const policy = this.policy?.evaluate(task, now) ?? { allowed: true, priorityAdjustment: 0, deadlineUrgency: 0, override: null };
-      if (!policy.allowed) {
-        policyBackpressure.push({ taskKey: task.key, repository: task.repository, reason: policy.reason });
+      const stage = taskStage(task);
+      if (!stageAllowed(task, admissionDecision)) {
+        policyBackpressure.push({ taskKey: task.key, repository: task.repository, reason: 'stage-admission-closed', stage, blockedStages: [...(admissionDecision.blockedStages ?? [])] });
         return [];
       }
-      return [{ task, policy, scoring: scoreTask(this.graph, task, { now, activeClaims, priorityAdjustment: policy.priorityAdjustment }) }];
+      const policy = this.policy?.evaluate(task, now) ?? { allowed: true, priorityAdjustment: 0, deadlineUrgency: 0, override: null };
+      if (!policy.allowed) {
+        policyBackpressure.push({ taskKey: task.key, repository: task.repository, reason: policy.reason, stage });
+        return [];
+      }
+      return [{ task, stage, policy, scoring: scoreTask(this.graph, task, { now, activeClaims, priorityAdjustment: policy.priorityAdjustment }) }];
     }).sort((a, b) => b.scoring.score - a.scoring.score || a.task.key.localeCompare(b.task.key));
 
     const dispatches = [];
     const backpressure = [...policyBackpressure];
     for (const candidate of candidates) {
-      const { task, scoring, policy } = candidate;
+      const { task, stage, scoring, policy } = candidate;
       const repo = task.repository ?? '__unscoped__';
       if (dispatches.length >= remainingLaneBudget) {
-        backpressure.push({ taskKey: task.key, reason: 'global-lane-capacity', adaptiveLimit, activeClaims: activeClaims.length });
+        backpressure.push({ taskKey: task.key, reason: 'global-lane-capacity', stage, adaptiveLimit, activeClaims: activeClaims.length });
         continue;
       }
       const repoLimit = this.repoLaneLimits[repo] ?? this.repoLaneLimit;
       if ((repoUsage.get(repo) ?? 0) >= repoLimit) {
-        backpressure.push({ taskKey: task.key, reason: 'repository-wip-limit', repository: task.repository, limit: repoLimit });
+        backpressure.push({ taskKey: task.key, reason: 'repository-wip-limit', stage, repository: task.repository, limit: repoLimit });
         continue;
       }
       const taskClass = task.taskClass ?? 'standard';
@@ -104,7 +110,7 @@ export class PortfolioScheduler {
         .sort((a, b) => b.suitability.score - a.suitability.score || a.worker.workerId.localeCompare(b.worker.workerId));
       const selected = eligible[0];
       if (!selected) {
-        backpressure.push({ taskKey: task.key, reason: 'no-eligible-worker', requirements: task.requirements ?? {} });
+        backpressure.push({ taskKey: task.key, reason: 'no-eligible-worker', stage, requirements: task.requirements ?? {} });
         continue;
       }
       const worker = selected.worker;
@@ -118,6 +124,7 @@ export class PortfolioScheduler {
         workerId: worker.workerId,
         score: scoring.score,
         explanation: {
+          stage,
           priority: scoring.priority,
           policyPriorityAdjustment: scoring.priorityAdjustment,
           deadlineUrgency: policy.deadlineUrgency ?? 0,
@@ -134,7 +141,8 @@ export class PortfolioScheduler {
           workerCpuPct: worker.pressure?.cpuPct ?? 0,
           workerMemoryPct: worker.pressure?.memoryPct ?? 0,
           adaptiveLaneLimit: adaptiveLimit,
-          repositoryLaneLimit: repoLimit
+          repositoryLaneLimit: repoLimit,
+          blockedStages: [...(admissionDecision.blockedStages ?? [])]
         }
       });
     }
