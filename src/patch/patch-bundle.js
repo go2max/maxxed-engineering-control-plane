@@ -21,12 +21,19 @@ function normalizeWrite(write) {
   const deleted = write?.delete === true;
   if (deleted && write.content != null) throw new Error(`deleted patch write cannot include content: ${file}`);
   if (!deleted && typeof write?.content !== 'string') throw new Error(`patch write content is required: ${file}`);
-  const beforeHash = write.beforeHash == null ? null : String(write.beforeHash).toLowerCase();
+  const beforeContent = write.beforeContent == null ? null : String(write.beforeContent);
+  let beforeHash = write.beforeHash == null ? null : String(write.beforeHash).toLowerCase();
   if (beforeHash != null && !SHA256.test(beforeHash)) throw new Error(`invalid beforeHash for ${file}`);
+  if (beforeContent != null) {
+    const computedBefore = contentHash(beforeContent);
+    if (beforeHash != null && beforeHash !== computedBefore) throw new Error(`beforeHash mismatch for ${file}`);
+    beforeHash = computedBefore;
+  }
   const afterHash = deleted ? null : contentHash(write.content);
   if (write.afterHash != null && String(write.afterHash).toLowerCase() !== afterHash) throw new Error(`afterHash mismatch for ${file}`);
   return {
     path: file,
+    beforeContent,
     beforeHash,
     afterHash,
     delete: deleted,
