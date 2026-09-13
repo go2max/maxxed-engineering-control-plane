@@ -2,6 +2,7 @@ import { criticalPathScore, portfolioFairnessPenalty } from './critical-path.js'
 import { rebalanceRecommendations } from './scheduler-policy.js';
 import { buildDispatchAudit, workerSuitability } from './dispatch-audit.js';
 import { stageAllowed, taskStage } from './task-stage.js';
+import { packetBlockedByActiveClaim, workPacketView } from './work-packet-adapter.js';
 
 function requirementMatch(worker, task) {
   const req = task.requirements ?? {};
@@ -72,6 +73,15 @@ export class PortfolioScheduler {
     const policyBackpressure = [];
     const candidates = this.graph.frontier(taskPredicate).flatMap((task) => {
       const stage = taskStage(task);
+      const packet = workPacketView(task);
+      if (!packet.valid) {
+        policyBackpressure.push({ taskKey: task.key, repository: task.repository, reason: packet.reason, stage });
+        return [];
+      }
+      if (packetBlockedByActiveClaim(task, activeClaims)) {
+        policyBackpressure.push({ taskKey: task.key, repository: task.repository, reason: 'work-packet-active', stage, packetKey: packet.packetKey });
+        return [];
+      }
       if (!stageAllowed(task, admissionDecision)) {
         policyBackpressure.push({ taskKey: task.key, repository: task.repository, reason: 'stage-admission-closed', stage, blockedStages: [...(admissionDecision.blockedStages ?? [])] });
         return [];
@@ -81,16 +91,20 @@ export class PortfolioScheduler {
         policyBackpressure.push({ taskKey: task.key, repository: task.repository, reason: policy.reason, stage });
         return [];
       }
-      return [{ task, stage, policy, scoring: scoreTask(this.graph, task, { now, activeClaims, priorityAdjustment: policy.priorityAdjustment }) }];
+      return [{ task, stage, packet, policy, scoring: scoreTask(this.graph, task, { now, activeClaims, priorityAdjustment: policy.priorityAdjustment }) }];
     }).sort((a, b) => b.scoring.score - a.scoring.score || a.task.key.localeCompare(b.task.key));
 
     const dispatches = [];
     const backpressure = [...policyBackpressure];
     for (const candidate of candidates) {
-      const { task, stage, scoring, policy } = candidate;
+      const { task, stage, packet, scoring, policy } = candidate;
       const repo = task.repository ?? '__unscoped__';
       if (dispatches.length >= remainingLaneBudget) {
         backpressure.push({ taskKey: task.key, reason: 'global-lane-capacity', stage, adaptiveLimit, activeClaims: activeClaims.length });
+        continue;
+      }
+      if (packet.packetKey && activeClaims.some((claim) => claim.packetKey === packet.packetKey && claim.taskKey !== task.key)) {
+        backpressure.push({ taskKey: task.key, reason: 'work-packet-active', stage, packetKey: packet.packetKey });
         continue;
       }
       const repoLimit = this.repoLaneLimits[repo] ?? this.repoLaneLimit;
@@ -116,15 +130,19 @@ export class PortfolioScheduler {
       const worker = selected.worker;
       workerSlots.set(worker.workerId, workerSlots.get(worker.workerId) - 1);
       repoUsage.set(repo, (repoUsage.get(repo) ?? 0) + 1);
-      activeClaims = [...activeClaims, { taskKey: task.key, repository: task.repository, product: task.product, workerId: worker.workerId }];
+      activeClaims = [...activeClaims, { taskKey: task.key, repository: task.repository, product: task.product, workerId: worker.workerId, packetKey: packet.packetKey }];
       dispatches.push({
         taskKey: task.key,
         repository: task.repository,
         product: task.product,
         workerId: worker.workerId,
         score: scoring.score,
+        workPacket: packet.contract,
         explanation: {
           stage,
+          workPacketKey: packet.packetKey,
+          workPacketBranch: packet.contract?.branch ?? null,
+          workPacketBaseCommit: packet.contract?.baseCommit ?? null,
           priority: scoring.priority,
           policyPriorityAdjustment: scoring.priorityAdjustment,
           deadlineUrgency: policy.deadlineUrgency ?? 0,
