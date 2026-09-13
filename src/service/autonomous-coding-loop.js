@@ -42,9 +42,13 @@ export class AutonomousCodingLoop {
       this.runtime.lastThroughputDecision = throughput;
 
       const previousLimit = this.runtime.scheduler.totalLaneLimit;
+      let dispatches;
       this.runtime.scheduler.totalLaneLimit = Math.max(1, throughput.allowedConcurrency || 1);
-      const dispatches = this.runtime.orchestrator.dispatch(workers, { now, taskPredicate: isCodingTask });
-      this.runtime.scheduler.totalLaneLimit = previousLimit;
+      try {
+        dispatches = this.runtime.orchestrator.dispatch(workers, { now, taskPredicate: isCodingTask });
+      } finally {
+        this.runtime.scheduler.totalLaneLimit = previousLimit;
+      }
 
       const submitted = [];
       for (const dispatch of dispatches) {
