@@ -1,6 +1,13 @@
 import { TaskState } from '../core/task-graph.js';
 import { LeverageStrategy } from './leverage-engine.js';
 
+function immutableSourceFingerprint(task, environment) {
+  const explicit = environment?.repoSha ?? environment?.sourceFingerprint ?? null;
+  if (typeof explicit === 'string' && explicit.trim()) return explicit.trim();
+  const ref = task.metadata?.execution?.ref ?? '';
+  return /^[0-9a-f]{40}$/i.test(ref) ? ref : null;
+}
+
 export class LeverageRuntimeAdapter {
   constructor({ runtime, engine, cas, harvester, repairs = null } = {}) {
     if (!runtime || !engine || !cas || !harvester) throw new Error('runtime, engine, cas and harvester are required');
@@ -8,14 +15,16 @@ export class LeverageRuntimeAdapter {
   }
 
   prepareCodingTask(task, { normalizedSpec = null, dependencySeeds = [], context = {}, environment = null, policyVersion = '1' } = {}) {
-    const spec = normalizedSpec ?? { repository: task.repository, objective: task.objective, acceptance: task.metadata?.acceptance ?? {}, execution: { baseBranch: task.metadata?.execution?.baseBranch ?? 'main', ref: task.metadata?.execution?.ref ?? 'HEAD' } };
-    const plan = this.engine.plan({ taskClass: task.taskClass ?? 'coding', normalizedSpec: spec, dependencySeeds, context, environment, policyVersion });
-    task.metadata = { ...(task.metadata ?? {}), leverage: { strategy: plan.strategy, solutionKey: plan.solutionKey, transformId: plan.transformId ?? null, estimatedReasoningUnits: plan.estimatedReasoningUnits, dependencySlice: plan.dependencySlice ?? null, semanticExampleKeys: (plan.semanticExamples ?? []).map((x) => x.key) } };
+    const sourceFingerprint = immutableSourceFingerprint(task, environment);
+    const normalizedEnvironment = { ...(environment ?? {}), sourceFingerprint };
+    const spec = normalizedSpec ?? { repository: task.repository, objective: task.objective, acceptance: task.metadata?.acceptance ?? {}, execution: { baseBranch: task.metadata?.execution?.baseBranch ?? 'main', ref: sourceFingerprint ?? task.metadata?.execution?.ref ?? 'HEAD' } };
+    const plan = this.engine.plan({ taskClass: task.taskClass ?? 'coding', normalizedSpec: spec, dependencySeeds, context, environment: normalizedEnvironment, policyVersion, exactReuseAllowed: Boolean(sourceFingerprint) });
+    task.metadata = { ...(task.metadata ?? {}), leverage: { strategy: plan.strategy, solutionKey: plan.solutionKey, transformId: plan.transformId ?? null, estimatedReasoningUnits: plan.estimatedReasoningUnits, dependencySlice: plan.dependencySlice ?? null, semanticExampleKeys: (plan.semanticExamples ?? []).map((x) => x.key), sourceFingerprint } };
 
     if (plan.strategy === LeverageStrategy.EXACT_REUSE) {
       this.runtime.ingest(task, { idempotencyKey: task.dedupeKey });
       this.runtime.graph.setState(task.key, TaskState.ACCEPTED, { reason: 'exact-solution-cache-hit', cachedSolution: plan.exact.result, leverage: task.metadata.leverage });
-      this.runtime.journal.append('leverage.exact-reuse', { taskKey: task.key, solutionKey: plan.solutionKey });
+      this.runtime.journal.append('leverage.exact-reuse', { taskKey: task.key, solutionKey: plan.solutionKey, sourceFingerprint });
       return { task: this.runtime.graph.get(task.key), plan, reused: true };
     }
     return { task, plan, reused: false };
