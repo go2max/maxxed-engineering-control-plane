@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { compileCodingTask, fabricTaskFromDispatch } from '../src/agents/coding-task.js';
 import { ThroughputGovernor } from '../src/scheduler/throughput-governor.js';
 
- test('coding task compiler produces bounded branch-preserving fabric payload', () => {
+test('coding task compiler produces bounded generation-scoped fabric payload', () => {
   const task = compileCodingTask({
     key: 'issue-123', repository: 'Maxxed-Technical-Systems/demo', repoPath: 'C:/repos/demo',
     objective: 'Fix the failing validation', testCommands: [{ name: 'unit', command: 'npm', args: ['test'] }]
@@ -11,15 +11,18 @@ import { ThroughputGovernor } from '../src/scheduler/throughput-governor.js';
   assert.equal(task.state, 'READY');
   assert.deepEqual(task.requirements.capabilities, ['coding-agent', 'git', 'node']);
   assert.equal(task.metadata.execution.kind, 'coding-agent');
-  assert.equal(task.metadata.execution.branchName, 'maxxed/agent/issue-123');
+  assert.equal(task.metadata.execution.branchBase, 'maxxed/agent/issue-123');
   assert.equal(task.metadata.execution.autoCommit, true);
   assert.equal(task.metadata.execution.autoPush, true);
 
-  const dispatch = { workerId: 'worker-1', claim: { taskKey: task.key, ownerId: 'worker-1', claimId: 'claim-1', generation: 1 } };
+  const dispatch = { workerId: 'worker-1', claim: { taskKey: task.key, ownerId: 'worker-1', claimId: 'claim-1', generation: 3 } };
   const fabric = fabricTaskFromDispatch(task, dispatch);
   assert.equal(fabric.taskId, 'claim-1');
   assert.equal(fabric.preferredWorkerId, 'worker-1');
   assert.equal(fabric.payload.controlPlaneTaskKey, 'issue-123');
+  assert.equal(fabric.payload.branchName, 'maxxed/agent/issue-123-g3');
+  assert.equal(fabric.payload.autoPush, false);
+  assert.equal(fabric.payload.publishAfterLeaseValidation, true);
 });
 
 test('throughput governor doubles healthy baseline but contracts on backpressure', () => {
