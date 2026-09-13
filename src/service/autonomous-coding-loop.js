@@ -7,10 +7,19 @@ function acceptedBundle(task) {
   return [...(task?.lineage ?? [])].reverse().find((entry) => entry.state === TaskState.ACCEPTED && entry.evidence?.evidenceBundle)?.evidence?.evidenceBundle ?? null;
 }
 
+function workerIdFromBundle(bundle) {
+  return bundle?.payload?.evidence?.producerId ?? bundle?.payload?.producerId ?? null;
+}
+
+function durationFromBundle(bundle) {
+  const value = bundle?.payload?.evidence?.artifacts?.durationMs ?? bundle?.payload?.evidence?.durationMs ?? null;
+  return Number.isFinite(Number(value)) ? Number(value) : null;
+}
+
 export class AutonomousCodingLoop {
-  constructor({ runtime, fabricClient, promotion = null, leverage = null, intervalMs = 2_000, now = () => Date.now() } = {}) {
+  constructor({ runtime, fabricClient, promotion = null, leverage = null, workerPerformance = null, intervalMs = 2_000, now = () => Date.now() } = {}) {
     if (!runtime || !fabricClient) throw new Error('runtime and fabricClient are required');
-    this.runtime = runtime; this.fabric = fabricClient; this.promotion = promotion; this.leverage = leverage; this.intervalMs = Math.max(500, Number(intervalMs)); this.now = now;
+    this.runtime = runtime; this.fabric = fabricClient; this.promotion = promotion; this.leverage = leverage; this.workerPerformance = workerPerformance; this.intervalMs = Math.max(500, Number(intervalMs)); this.now = now;
     this.timer = null; this.running = false; this.lastTick = null;
   }
 
@@ -25,20 +34,33 @@ export class AutonomousCodingLoop {
 
   stop() { if (this.timer) clearInterval(this.timer); this.timer = null; }
 
+  #recordWorkerOutcome(task, bundle, accepted, failureClass = null, now = Date.now()) {
+    const workerId = workerIdFromBundle(bundle);
+    if (!this.workerPerformance || !workerId || !task) return null;
+    const language = task.requirements?.language ?? task.metadata?.language ?? 'any';
+    return this.workerPerformance.record({ workerId, taskClass: task.taskClass ?? 'coding', language, accepted, durationMs: durationFromBundle(bundle), failureClass, now });
+  }
+
   #harvest(reconciled, now) {
-    if (!this.leverage) return [];
     const harvested = [];
     for (const row of reconciled) {
       const task = this.runtime.graph.get(row.taskKey);
       if (task) {
         if (row.action === 'ACCEPT') {
           const bundle = acceptedBundle(task);
-          if (bundle) harvested.push(this.leverage.recordAccepted(task, bundle, { now }));
-        } else if (row.action) harvested.push(this.leverage.recordOutcome(task, row.action, { fabricTaskId: row.fabricTaskId ?? null, branchName: row.branchName ?? null, commitSha: row.commitSha ?? null }));
+          if (bundle) {
+            if (this.leverage) harvested.push(this.leverage.recordAccepted(task, bundle, { now }));
+            this.#recordWorkerOutcome(task, bundle, true, null, now);
+          }
+        } else if (row.action) {
+          if (this.leverage) harvested.push(this.leverage.recordOutcome(task, row.action, { fabricTaskId: row.fabricTaskId ?? null, branchName: row.branchName ?? null, commitSha: row.commitSha ?? null }));
+          const bundle = acceptedBundle(task);
+          this.#recordWorkerOutcome(task, bundle, false, row.action, now);
+        }
       }
       if (row.parentTaskKey && row.parentState === TaskState.ACCEPTED) {
         const parent = this.runtime.graph.get(row.parentTaskKey); const bundle = acceptedBundle(parent);
-        if (parent && bundle) harvested.push(this.leverage.recordAccepted(parent, bundle, { now }));
+        if (parent && bundle && this.leverage) harvested.push(this.leverage.recordAccepted(parent, bundle, { now }));
       }
     }
     return harvested.filter(Boolean);
