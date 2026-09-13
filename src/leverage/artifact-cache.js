@@ -18,6 +18,6 @@ export class ArtifactCache {
     row.hits += 1; return structuredClone(row);
   }
   invalidateTags(tags = []) { const wanted = new Set(tags); let removed = 0; for (const [key, row] of this.entries) if (row.tags.some((tag) => wanted.has(tag))) { this.entries.delete(key); removed += 1; } return removed; }
-  snapshot() { return { version: 1, maxEntries: this.maxEntries, entries: [...this.entries.values()].map(structuredClone) }; }
+  snapshot() { return { version: 1, maxEntries: this.maxEntries, entries: [...this.entries.values()].map((row) => structuredClone(row)) }; }
   restore(snapshot) { this.maxEntries = Math.max(1, Number(snapshot?.maxEntries ?? this.maxEntries)); this.entries = new Map((snapshot?.entries ?? []).map((row) => [row.key, structuredClone(row)])); }
 }
