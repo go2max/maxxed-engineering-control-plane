@@ -4,24 +4,31 @@ import { compileCodingTask, fabricTaskFromDispatch } from '../src/agents/coding-
 import { ThroughputGovernor } from '../src/scheduler/throughput-governor.js';
 import { synthesizeRepairTask } from '../src/verification/evidence-bundle.js';
 
-test('coding task compiler produces bounded generation-scoped fabric payload', () => {
+test('coding task compiler produces bounded generation-scoped fabric payload with routed model', () => {
   const task = compileCodingTask({
     key: 'issue-123', repository: 'Maxxed-Technical-Systems/demo', repoPath: 'C:/repos/demo',
     objective: 'Fix the failing validation', testCommands: [{ name: 'unit', command: 'npm', args: ['test'] }]
   });
   assert.equal(task.state, 'READY');
   assert.deepEqual(task.requirements.capabilities, ['coding-agent', 'git', 'node']);
+  assert.deepEqual(task.metadata.modelRequest.capabilities, ['coding']);
   assert.equal(task.metadata.execution.kind, 'coding-agent');
   assert.equal(task.metadata.execution.branchBase, 'maxxed/agent/issue-123');
   assert.equal(task.metadata.execution.autoCommit, true);
   assert.equal(task.metadata.execution.autoPush, true);
 
-  const dispatch = { workerId: 'worker-1', claim: { taskKey: task.key, ownerId: 'worker-1', claimId: 'claim-1', generation: 3 } };
+  const dispatch = {
+    workerId: 'worker-1',
+    claim: { taskKey: task.key, ownerId: 'worker-1', claimId: 'claim-1', generation: 3 },
+    modelSelection: { model: { id: 'coder-1', endpoint: 'http://model-host:8080' } }
+  };
   const fabric = fabricTaskFromDispatch(task, dispatch);
   assert.equal(fabric.taskId, 'claim-1');
   assert.equal(fabric.preferredWorkerId, 'worker-1');
   assert.equal(fabric.payload.controlPlaneTaskKey, 'issue-123');
   assert.equal(fabric.payload.branchName, 'maxxed/agent/issue-123-g3');
+  assert.equal(fabric.payload.model, 'coder-1');
+  assert.equal(fabric.payload.modelEndpoint, 'http://model-host:8080');
   assert.equal(fabric.payload.autoPush, false);
   assert.equal(fabric.payload.publishAfterLeaseValidation, true);
 });
@@ -40,6 +47,7 @@ test('coding repair task continues from failed attempt commit', () => {
   assert.match(repair.metadata.execution.branchBase, /repair-1$/);
   assert.equal(repair.metadata.execution.autoPush, true);
   assert.equal(repair.metadata.repairOf, 'issue-124');
+  assert.deepEqual(repair.metadata.modelRequest, task.metadata.modelRequest);
 });
 
 test('throughput governor doubles healthy baseline but contracts on backpressure', () => {
