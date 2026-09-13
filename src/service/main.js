@@ -8,6 +8,13 @@ import { GitHubPullRequestAdapter } from './github-pr-adapter.js';
 import { PullRequestPromotion } from './pr-promotion.js';
 import { createControlPlaneServer } from './http-server.js';
 import { RuntimeStateStore } from '../core/runtime-state.js';
+import { SolutionCAS } from '../leverage/solution-cas.js';
+import { SemanticCodeGraph } from '../leverage/semantic-code-graph.js';
+import { TransformRegistry } from '../leverage/transform-registry.js';
+import { TrajectoryHarvester } from '../leverage/trajectory-harvester.js';
+import { RepairMemory } from '../leverage/repair-memory.js';
+import { LeverageEngine } from '../leverage/leverage-engine.js';
+import { LeverageRuntimeAdapter } from '../leverage/runtime-adapter.js';
 
 const host = process.env.MAXXED_CONTROL_HOST ?? '127.0.0.1';
 const port = Number(process.env.MAXXED_CONTROL_PORT ?? 7790);
@@ -15,6 +22,7 @@ const adminToken = process.env.MAXXED_CONTROL_ADMIN_TOKEN ?? '';
 if (!adminToken) throw new Error('MAXXED_CONTROL_ADMIN_TOKEN is required');
 
 const statePath = process.env.MAXXED_CONTROL_STATE_PATH ?? path.join(os.homedir(), '.maxxed-control-plane', 'state.json');
+const leverageStatePath = process.env.MAXXED_LEVERAGE_STATE_PATH ?? path.join(os.homedir(), '.maxxed-control-plane', 'leverage.json');
 const persistMs = Number(process.env.MAXXED_CONTROL_PERSIST_MS ?? 1000);
 const fabricUrl = process.env.MAXXED_FABRIC_URL ?? 'http://127.0.0.1:7788';
 const fabricAdminToken = process.env.MAXXED_FABRIC_ADMIN_TOKEN ?? '';
@@ -32,20 +40,40 @@ const runtime = new ControlPlaneRuntime({
     maxFailureRate: Number(process.env.MAXXED_MAX_FAILURE_RATE ?? 0.2)
   }
 });
+
+const solutionCas = new SolutionCAS({ maxEntries: Number(process.env.MAXXED_SOLUTION_CACHE_MAX ?? 10000) });
+const semanticGraph = new SemanticCodeGraph();
+const transforms = new TransformRegistry();
+const trajectoryHarvester = new TrajectoryHarvester({ maxRecords: Number(process.env.MAXXED_TRAJECTORY_MAX ?? 50000) });
+const repairMemory = new RepairMemory();
+const leverageEngine = new LeverageEngine({ cas: solutionCas, graph: semanticGraph, transforms, repairs: repairMemory });
+const leverage = new LeverageRuntimeAdapter({ runtime, engine: leverageEngine, cas: solutionCas, harvester: trajectoryHarvester });
+const leverageComponents = { leverage, solutionCas, semanticGraph, transforms, trajectoryHarvester, repairMemory, leverageEngine };
+
 const store = new RuntimeStateStore(statePath);
+const leverageStore = new RuntimeStateStore(leverageStatePath);
 const restored = await store.load();
 if (restored) runtime.restore(restored);
+const restoredLeverage = await leverageStore.load();
+if (restoredLeverage?.version === 1) {
+  solutionCas.restore(restoredLeverage.solutionCas);
+  semanticGraph.restore(restoredLeverage.semanticGraph);
+  trajectoryHarvester.restore(restoredLeverage.trajectories);
+  repairMemory.restore(restoredLeverage.repairMemory);
+}
 
 const githubAdapter = githubToken ? new GitHubPullRequestAdapter({ token: githubToken }) : null;
 const promotion = githubAdapter ? new PullRequestPromotion({ runtime, adapter: githubAdapter }) : null;
-const codingLoop = fabricExecutionClient ? new AutonomousCodingLoop({ runtime, fabricClient: fabricExecutionClient, promotion, intervalMs: Number(process.env.MAXXED_CODING_LOOP_MS ?? 2_000) }) : null;
-const server = createControlPlaneServer({ runtime, adminToken, codingLoop });
+const codingLoop = fabricExecutionClient ? new AutonomousCodingLoop({ runtime, fabricClient: fabricExecutionClient, promotion, leverage, intervalMs: Number(process.env.MAXXED_CODING_LOOP_MS ?? 2_000) }) : null;
+const server = createControlPlaneServer({ runtime, adminToken, codingLoop, leverageComponents });
 let saving = false;
 const persist = async () => {
   if (saving) return;
   saving = true;
-  try { await store.save(runtime.snapshot()); }
-  catch (error) { console.error(JSON.stringify({ event: 'control-plane-persistence-failed', error: error.message })); }
+  try {
+    await store.save(runtime.snapshot());
+    await leverageStore.save({ version: 1, solutionCas: solutionCas.snapshot(), semanticGraph: semanticGraph.snapshot(), trajectories: trajectoryHarvester.snapshot(), repairMemory: repairMemory.snapshot() });
+  } catch (error) { console.error(JSON.stringify({ event: 'control-plane-persistence-failed', error: error.message })); }
   finally { saving = false; }
 };
 const timer = setInterval(() => void persist(), persistMs);
@@ -53,6 +81,7 @@ timer.unref();
 
 server.listen(port, host, () => {
   console.log(`maxxed engineering control plane listening on http://${host}:${port}`);
+  console.log(`leverage fabric active: cache=${solutionCas.entries.size}, trajectories=${trajectoryHarvester.records.length}`);
   if (codingLoop) {
     codingLoop.start();
     console.log(`autonomous coding loop active at ${runtime.throughput.targetMultiplier}x baseline target`);
