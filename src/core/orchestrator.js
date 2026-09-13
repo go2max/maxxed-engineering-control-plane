@@ -14,18 +14,18 @@ export class EngineeringOrchestrator {
     this.verificationLedger = verificationLedger;
   }
 
-  dispatch(workers, { now = Date.now() } = {}) {
+  dispatch(workers, { now = Date.now(), taskPredicate = () => true } = {}) {
     this.claims.sweepExpired(now);
     const activeClaims = this.claims.list().map((claim) => ({
       taskKey: claim.taskKey,
       repository: this.graph.get(claim.taskKey)?.repository ?? null,
       workerId: claim.ownerId
     }));
-    const proposed = this.scheduler.plan(workers, { now, activeClaims });
+    const proposed = this.scheduler.plan(workers, { now, activeClaims, taskPredicate });
     const accepted = [];
     for (const dispatch of proposed) {
       const task = this.graph.get(dispatch.taskKey);
-      if (!task || !this.graph.isExecutable(task.key)) continue;
+      if (!task || !taskPredicate(task) || !this.graph.isExecutable(task.key)) continue;
       const scopes = this.#scopesFor(task);
       const claim = this.claims.claim({ taskKey: task.key, ownerId: dispatch.workerId, scopes }, now);
       if (!claim) continue;
