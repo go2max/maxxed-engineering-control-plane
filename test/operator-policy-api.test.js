@@ -21,6 +21,58 @@ test('unsupported commands and invalid lane limits fail closed', () => {
   assert.throws(() => value.operatorCommand({ action: 'set-repository-lane-limit', input: { repository: 'r1', limit: 1000 } }), /0..64/);
 });
 
+test('duplicate operator command ids return original result without second side effect', () => {
+  const value = runtime();
+  const first = value.operatorCommand(
+    { action: 'freeze-repository', input: { repository: 'r1', reason: 'maintenance' } },
+    { commandId: 'cmd-freeze-1', now: 100 }
+  );
+  const firstSequence = value.journal.sequence;
+  const second = value.operatorCommand(
+    { action: 'freeze-repository', input: { repository: 'r1', reason: 'maintenance' } },
+    { commandId: 'cmd-freeze-1', now: 200 }
+  );
+  assert.deepEqual(second, first);
+  assert.equal(value.journal.sequence, firstSequence);
+  assert.equal(value.status().scheduler.policy.frozenRepositories.length, 1);
+});
+
+test('operator command id cannot be reused with a different payload', () => {
+  const value = runtime();
+  value.operatorCommand(
+    { action: 'set-repository-lane-limit', input: { repository: 'r1', limit: 1 } },
+    { commandId: 'cmd-lane-1' }
+  );
+  assert.throws(
+    () => value.operatorCommand(
+      { action: 'set-repository-lane-limit', input: { repository: 'r1', limit: 2 } },
+      { commandId: 'cmd-lane-1' }
+    ),
+    /idempotency key reused with different request/
+  );
+  assert.equal(value.status().scheduler.repositoryLaneLimits.r1, 1);
+});
+
+test('operator command deduplication survives snapshot restore', () => {
+  const first = runtime();
+  const original = first.operatorCommand(
+    { action: 'pause-dispatch' },
+    { commandId: 'cmd-pause-1', now: 100 }
+  );
+  const snapshot = first.snapshot();
+
+  const second = runtime();
+  second.restore(snapshot, 1000);
+  const beforeReplaySequence = second.journal.sequence;
+  const replay = second.operatorCommand(
+    { action: 'pause-dispatch' },
+    { commandId: 'cmd-pause-1', now: 1100 }
+  );
+  assert.deepEqual(replay, original);
+  assert.equal(second.journal.sequence, beforeReplaySequence);
+  assert.equal(second.status().paused, true);
+});
+
 test('scheduler policy and lane overrides survive snapshot restore', () => {
   const first = runtime();
   first.operatorCommand({ action: 'pause-dispatch' });
