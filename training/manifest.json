@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "dataset_id": "maxxed-engineering-seed-v1",
+  "created_at": "2026-09-13T04:35:00Z",
+  "purpose": "Seed a local engineering model with validated Maxxed orchestration, scheduling, repair, routing, product-factory, and operator behaviors.",
+  "authoritative_state_policy": "The model is advisory. Deterministic control-plane state, leases, fencing, liveness, admission, and acceptance gates remain authoritative.",
+  "privacy": {
+    "raw_chat_transcripts_included": false,
+    "secrets_included": false,
+    "credentials_included": false,
+    "personal_data_included": false,
+    "private_repository_source_included": false
+  },
+  "splits": {
+    "train": "train/seed-v1.jsonl",
+    "eval": "eval/seed-v1.jsonl"
+  },
+  "record_schema": {
+    "id": "string",
+    "task_class": "string",
+    "source_category": "string",
+    "instruction": "string",
+    "input": "object",
+    "output": "object|string",
+    "provenance": "object",
+    "tags": "string[]"
+  },
+  "provenance": {
+    "control_plane_validated_sha": "264b5b36753968b8e8032c28d00150136bb1e526",
+    "control_plane_retirement_sha": "5bb05aa39e3e487ccb1b210e668e2059b2188ff5",
+    "compute_fabric_validated_sha": "cf96fc43cc878f46e843b1e6b17364588c922652",
+    "admin_validated_sha": "1d9208268eabbf38f698711c96747d31a6c123b6",
+    "validation_policy": "2/2 successful runs on Maxxed-Technical-Systems organization-scoped local self-hosted runner"
+  },
+  "contamination_controls": {
+    "eval_ids_must_not_appear_in_train": true,
+    "eval_prompts_must_not_be_generated_from_train_by_simple_paraphrase": true,
+    "future_runtime_logs_require_redaction_before_ingestion": true,
+    "accepted_and_rejected_examples_should_both_be_retained": true
+  }
+}
