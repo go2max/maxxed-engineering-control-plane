@@ -57,7 +57,7 @@ const bottleneckOptimizer = new BottleneckOptimizer();
 const maintenancePlanner = new MaintenancePlanner();
 const replayProjector = defaultControlPlaneReplayProjector();
 const leverageEngine = new LeverageEngine({ cas: solutionCas, graph: semanticGraph, transforms, repairs: repairMemory });
-const leverage = new LeverageRuntimeAdapter({ runtime, engine: leverageEngine, cas: solutionCas, harvester: trajectoryHarvester });
+const leverage = new LeverageRuntimeAdapter({ runtime, engine: leverageEngine, cas: solutionCas, harvester: trajectoryHarvester, repairs: repairMemory });
 const leverageComponents = { leverage, solutionCas, artifactCache, semanticGraph, transforms, trajectoryHarvester, repairMemory, productFamilies, bottleneckOptimizer, maintenancePlanner, replayProjector, leverageEngine };
 
 const store = new RuntimeStateStore(statePath);
