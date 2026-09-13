@@ -149,7 +149,7 @@ test('speculative planner fans out only when value or novelty justifies it', () 
   assert.equal(planner.plan({ novelty: 0.9, riskClass: 'high', expectedValue: 12, availableSlots: 4, verifierCapacity: 4 }).candidates, 4);
 });
 
-test('runtime adapter refuses exact reuse on mutable HEAD but reuses identical immutable source', () => {
+test('runtime adapter refuses exact reuse on mutable HEAD but reuses identical immutable source', async () => {
   const runtime = new ControlPlaneRuntime(); const cas = new SolutionCAS(); const graph = new SemanticCodeGraph(); const repairs = new RepairMemory(); const harvester = new TrajectoryHarvester();
   const engine = new LeverageEngine({ cas, graph, transforms: new TransformRegistry(), repairs });
   const adapter = new LeverageRuntimeAdapter({ runtime, engine, cas, harvester, repairs });
@@ -159,12 +159,12 @@ test('runtime adapter refuses exact reuse on mutable HEAD but reuses identical i
   const immutableSpec = { repository: 'o/r', objective: 'same fix', acceptance: task.metadata.acceptance, execution: { baseBranch: 'main', ref: repoSha } };
   cas.put({ taskClass: task.taskClass, normalizedSpec: immutableSpec, dependencySlice: { seedIds: [], nodes: [], edges: [] }, environment: { repoSha, sourceFingerprint: repoSha }, policyVersion: '1' }, { artifacts: { commitSha: 'abc' } }, { tags: [task.taskClass] });
 
-  const mutable = adapter.prepareCodingTask(task);
+  const mutable = await adapter.prepareCodingTask(task);
   assert.equal(mutable.reused, false);
   assert.notEqual(mutable.plan.strategy, LeverageStrategy.EXACT_REUSE);
 
   const task2 = compileCodingTask({ key: 'repeat-2', repository: 'o/r', repoPath: '/repo', objective: 'same fix', ref: repoSha });
-  const prepared = adapter.prepareCodingTask(task2, { environment: { repoSha } });
+  const prepared = await adapter.prepareCodingTask(task2, { environment: { repoSha } });
   assert.equal(prepared.reused, true);
   assert.equal(runtime.graph.get('repeat-2').state, 'ACCEPTED');
 });
