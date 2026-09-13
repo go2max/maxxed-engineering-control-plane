@@ -1,4 +1,5 @@
 import http from 'node:http';
+import { compileCodingTask } from '../agents/coding-task.js';
 
 async function readJson(req) {
   const chunks = [];
@@ -29,7 +30,7 @@ function operatorCommandId(req, body) {
   return headerId ?? bodyId;
 }
 
-export function createControlPlaneServer({ runtime, adminToken }) {
+export function createControlPlaneServer({ runtime, adminToken, codingLoop = null }) {
   if (!runtime) throw new Error('runtime is required');
   if (!adminToken) throw new Error('adminToken is required');
 
@@ -47,6 +48,7 @@ export function createControlPlaneServer({ runtime, adminToken }) {
       if (req.method === 'GET' && url.pathname === '/tasks') return send(res, 200, { tasks: runtime.graph.list() });
       if (req.method === 'GET' && url.pathname === '/claims') return send(res, 200, { claims: runtime.claims.list() });
       if (req.method === 'GET' && url.pathname === '/models') return send(res, 200, { models: runtime.status().models });
+      if (req.method === 'GET' && url.pathname === '/coding/status') return send(res, 200, { enabled: Boolean(codingLoop), running: Boolean(codingLoop?.running), lastTick: codingLoop?.lastTick ?? null, throughput: runtime.lastThroughputDecision });
       if (req.method === 'GET' && url.pathname === '/events') {
         const afterSequence = Number(url.searchParams.get('afterSequence') ?? 0);
         const limit = Number(url.searchParams.get('limit') ?? 200);
@@ -56,6 +58,15 @@ export function createControlPlaneServer({ runtime, adminToken }) {
       if (req.method === 'POST' && url.pathname === '/tasks') {
         const body = await readJson(req);
         return send(res, 201, runtime.ingest(body, { idempotencyKey: idempotencyKey(req) }));
+      }
+      if (req.method === 'POST' && url.pathname === '/coding/tasks') {
+        const body = await readJson(req);
+        const task = compileCodingTask(body);
+        return send(res, 201, runtime.ingest(task, { idempotencyKey: idempotencyKey(req) ?? task.dedupeKey }));
+      }
+      if (req.method === 'POST' && url.pathname === '/coding/tick') {
+        if (!codingLoop) return send(res, 503, { error: 'autonomous coding loop is not configured' });
+        return send(res, 200, await codingLoop.tick());
       }
       if (req.method === 'POST' && url.pathname === '/dispatch') return send(res, 200, { dispatches: await runtime.dispatch() });
       if (req.method === 'POST' && url.pathname === '/results') {
