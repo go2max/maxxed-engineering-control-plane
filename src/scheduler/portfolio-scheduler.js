@@ -1,4 +1,5 @@
 import { criticalPathScore, portfolioFairnessPenalty } from './critical-path.js';
+import { rebalanceRecommendations } from './scheduler-policy.js';
 
 function requirementMatch(worker, task) {
   const req = task.requirements ?? {};
@@ -15,7 +16,7 @@ function requirementMatch(worker, task) {
   return true;
 }
 
-export function scoreTask(graph, task, { now = Date.now(), starvationMs = 30 * 60_000, activeClaims = [] } = {}) {
+export function scoreTask(graph, task, { now = Date.now(), starvationMs = 30 * 60_000, activeClaims = [], priorityAdjustment = 0 } = {}) {
   const priority = Number(task.metadata?.priority ?? 0);
   const createdAt = Number(task.metadata?.createdAt ?? now);
   const ageMs = Math.max(0, now - createdAt);
@@ -25,8 +26,8 @@ export function scoreTask(graph, task, { now = Date.now(), starvationMs = 30 * 6
   const fairness = portfolioFairnessPenalty(task, activeClaims);
   const riskPenalty = task.riskClass === 'high' ? 25 : task.riskClass === 'critical' ? 50 : 0;
   const failurePenalty = Number(task.metadata?.failureCount ?? 0) * 5;
-  const score = priority * 10 + unlock * 20 + critical.score + starvationSteps * 3 - riskPenalty - failurePenalty - fairness.total;
-  return { score, priority, unlock, criticalDepth: critical.depth, criticalPathScore: critical.score, starvationSteps, riskPenalty, failurePenalty, fairness };
+  const score = priority * 10 + priorityAdjustment + unlock * 20 + critical.score + starvationSteps * 3 - riskPenalty - failurePenalty - fairness.total;
+  return { score, priority, priorityAdjustment, unlock, criticalDepth: critical.depth, criticalPathScore: critical.score, starvationSteps, riskPenalty, failurePenalty, fairness };
 }
 
 export function adaptiveLaneCapacity(workers, hardLimit = 16) {
@@ -43,12 +44,13 @@ export function adaptiveLaneCapacity(workers, hardLimit = 16) {
 }
 
 export class PortfolioScheduler {
-  constructor({ graph, repoLaneLimit = 2, totalLaneLimit = 16, repoLaneLimits = {} } = {}) {
+  constructor({ graph, repoLaneLimit = 2, totalLaneLimit = 16, repoLaneLimits = {}, policy = null } = {}) {
     if (!graph) throw new Error('graph is required');
     this.graph = graph;
     this.repoLaneLimit = repoLaneLimit;
     this.totalLaneLimit = totalLaneLimit;
     this.repoLaneLimits = { ...repoLaneLimits };
+    this.policy = policy;
   }
 
   plan(workers, options = {}) { return this.planWithReport(workers, options).dispatches; }
@@ -60,13 +62,20 @@ export class PortfolioScheduler {
     const workerSlots = new Map(workers.map((worker) => [worker.workerId, Math.max(0, worker.capacity?.freeSlots ?? 0)]));
     const adaptiveLimit = adaptiveLaneCapacity(workers, this.totalLaneLimit);
     const remainingLaneBudget = Math.max(0, adaptiveLimit - activeClaims.length);
-    const candidates = this.graph.frontier().map((task) => ({ task, scoring: scoreTask(this.graph, task, { now, activeClaims }) }))
-      .sort((a, b) => b.scoring.score - a.scoring.score || a.task.key.localeCompare(b.task.key));
+    const policyBackpressure = [];
+    const candidates = this.graph.frontier().flatMap((task) => {
+      const policy = this.policy?.evaluate(task, now) ?? { allowed: true, priorityAdjustment: 0, deadlineUrgency: 0, override: null };
+      if (!policy.allowed) {
+        policyBackpressure.push({ taskKey: task.key, repository: task.repository, reason: policy.reason });
+        return [];
+      }
+      return [{ task, policy, scoring: scoreTask(this.graph, task, { now, activeClaims, priorityAdjustment: policy.priorityAdjustment }) }];
+    }).sort((a, b) => b.scoring.score - a.scoring.score || a.task.key.localeCompare(b.task.key));
 
     const dispatches = [];
-    const backpressure = [];
+    const backpressure = [...policyBackpressure];
     for (const candidate of candidates) {
-      const { task, scoring } = candidate;
+      const { task, scoring, policy } = candidate;
       const repo = task.repository ?? '__unscoped__';
       if (dispatches.length >= remainingLaneBudget) {
         backpressure.push({ taskKey: task.key, reason: 'global-lane-capacity', adaptiveLimit, activeClaims: activeClaims.length });
@@ -100,6 +109,9 @@ export class PortfolioScheduler {
         score: scoring.score,
         explanation: {
           priority: scoring.priority,
+          policyPriorityAdjustment: scoring.priorityAdjustment,
+          deadlineUrgency: policy.deadlineUrgency ?? 0,
+          priorityOverride: policy.override ?? null,
           dependencyUnlocks: scoring.unlock,
           criticalDepth: scoring.criticalDepth,
           criticalPathScore: scoring.criticalPathScore,
@@ -114,6 +126,7 @@ export class PortfolioScheduler {
         }
       });
     }
-    return { dispatches, backpressure, adaptiveLimit, remainingLaneBudget };
+    const rebalancing = rebalanceRecommendations({ workers, activeClaims, backpressure });
+    return { dispatches, backpressure, adaptiveLimit, remainingLaneBudget, rebalancing };
   }
 }
