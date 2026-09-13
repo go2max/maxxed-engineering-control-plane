@@ -22,6 +22,24 @@ test('accepted pushed coding branch is promoted exactly once', async () => {
   assert.equal(second[0].pullRequestNumber, 7);
 });
 
+test('accepted repair task is never promoted as a separate PR', async () => {
+  const runtime = new ControlPlaneRuntime();
+  const parent = compileCodingTask({ key: 't2', repository: 'Maxxed-Technical-Systems/demo', repoPath: '/repo', objective: 'fix bug', testCommands: [{ name: 'unit', command: 'npm', args: ['test'] }] });
+  runtime.ingest(parent);
+  runtime.ingest({
+    ...compileCodingTask({ key: 't2-repair', repository: 'Maxxed-Technical-Systems/demo', repoPath: '/repo', objective: 'repair bug', testCommands: [{ name: 'unit', command: 'npm', args: ['test'] }] }),
+    metadata: { ...parent.metadata, repairOf: 't2', closesParentOnAccept: true }
+  });
+  runtime.graph.setState('t2-repair', 'ACCEPTED', {
+    evidenceBundle: { payload: { evidence: { artifacts: { pushed: true, branchName: 'maxxed/agent/t2-repair-g2', commitSha: 'def456' } } } }
+  });
+  let calls = 0;
+  const promotion = new PullRequestPromotion({ runtime, adapter: { ensurePullRequest: async () => { calls += 1; return { created: true, pullRequest: { number: 8 } }; } } });
+  const result = await promotion.sync(1000);
+  assert.equal(calls, 0);
+  assert.deepEqual(result, []);
+});
+
 test('GitHub PR adapter reuses existing open PR', async () => {
   let requests = 0;
   const adapter = new GitHubPullRequestAdapter({
