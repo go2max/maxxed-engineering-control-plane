@@ -58,14 +58,17 @@ export class TaskGraph {
 
   snapshot() { return { version: 1, tasks: this.list() }; }
 
-  restore(snapshot, now = Date.now()) {
+  restore(snapshot, now = Date.now(), { activeClaimTaskKeys = new Set(), expiredClaimTaskKeys = new Set() } = {}) {
     if (!snapshot || snapshot.version !== 1) throw new Error('unsupported task graph snapshot');
     this.#tasks.clear();
     for (const input of snapshot.tasks ?? []) {
       const task = normalizeTask(input);
-      if (task.state === TaskState.CLAIMED) {
+      if (task.state === TaskState.CLAIMED && !activeClaimTaskKeys.has(task.key)) {
         task.state = task.metadata?.restartable === false ? TaskState.BLOCKED : TaskState.READY;
-        task.lineage.push({ at: now, state: task.state, evidence: { reason: 'control-plane restart invalidated active claim' } });
+        const reason = expiredClaimTaskKeys.has(task.key)
+          ? (task.metadata?.restartable === false ? 'restored claim expired during non-restartable work' : 'restored claim expired; task returned to frontier')
+          : 'control-plane restart found no active claim';
+        task.lineage.push({ at: now, state: task.state, evidence: { reason } });
       }
       this.#tasks.set(task.key, task);
     }
