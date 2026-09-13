@@ -32,8 +32,14 @@ export class FabricExecutionClient {
 }
 
 export function evidenceFromFabricResult(task, fabricTask) {
-  const result = fabricTask?.result ?? {};
-  const checks = result.checks ?? {};
+  const result = fabricTask?.result ?? fabricTask?.failure ?? {};
+  const required = task?.metadata?.acceptance?.requiredChecks ?? [];
+  const checks = { ...(result.checks ?? {}) };
+  if (fabricTask?.state === 'FAILED') {
+    for (const name of required) {
+      if (!(name in checks)) checks[name] = { ok: false, class: result.failureClass === 'EXECUTION_FAILURE' ? 'BUILD_FAILURE' : 'TEST_FAILURE', detail: result.error ?? 'worker execution failed' };
+    }
+  }
   return {
     producerId: fabricTask?.preferredWorkerId ?? 'fabric-worker',
     verifierId: null,
