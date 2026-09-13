@@ -71,13 +71,14 @@ const leverageStore = new RuntimeStateStore(leverageStatePath);
 const restored = await store.load();
 if (restored) runtime.restore(restored);
 const restoredLeverage = await leverageStore.load();
-if (restoredLeverage?.version === 2 || restoredLeverage?.version === 1) {
+if ([1,2,3].includes(restoredLeverage?.version)) {
   solutionCas.restore(restoredLeverage.solutionCas);
   artifactCache.restore(restoredLeverage.artifactCache);
   semanticGraph.restore(restoredLeverage.semanticGraph);
   trajectoryHarvester.restore(restoredLeverage.trajectories);
   repairMemory.restore(restoredLeverage.repairMemory);
   productFamilies.restore(restoredLeverage.productFamilies);
+  transforms.restore(restoredLeverage.transforms);
 }
 
 const githubAdapter = githubToken ? new GitHubPullRequestAdapter({ token: githubToken }) : null;
@@ -91,13 +92,14 @@ const persist = async () => {
   try {
     await store.save(runtime.snapshot());
     await leverageStore.save({
-      version: 2,
+      version: 3,
       solutionCas: solutionCas.snapshot(),
       artifactCache: artifactCache.snapshot(),
       semanticGraph: semanticGraph.snapshot(),
       trajectories: trajectoryHarvester.snapshot(),
       repairMemory: repairMemory.snapshot(),
-      productFamilies: productFamilies.snapshot()
+      productFamilies: productFamilies.snapshot(),
+      transforms: transforms.snapshot()
     });
   } catch (error) { console.error(JSON.stringify({ event: 'control-plane-persistence-failed', error: error.message })); }
   finally { saving = false; }
