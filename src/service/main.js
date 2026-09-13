@@ -16,30 +16,44 @@ import { RepairMemory } from '../leverage/repair-memory.js';
 import { LeverageEngine } from '../leverage/leverage-engine.js';
 import { LeverageRuntimeAdapter } from '../leverage/runtime-adapter.js';
 import { ArtifactCache } from '../leverage/artifact-cache.js';
+import { FileArtifactStore } from '../leverage/content-addressed-artifact-store.js';
 import { ProductFamilyPlanner } from '../leverage/product-family-planner.js';
+import { CANONICAL_PRODUCT_FAMILIES } from '../leverage/product-family-baselines.js';
 import { BottleneckOptimizer } from '../leverage/bottleneck-optimizer.js';
 import { MaintenancePlanner } from '../leverage/maintenance-planner.js';
 import { defaultControlPlaneReplayProjector } from '../leverage/execution-replay.js';
 import { SourceIndexer } from '../leverage/source-indexer.js';
+import { CodeIndexAdapterRegistry, ScipIndexAdapter } from '../leverage/code-index-adapters.js';
 import { ContextCompiler } from '../leverage/context-compiler.js';
 import { SpeculativePlanner } from '../leverage/speculative-planner.js';
+import { DerivedStateManager } from '../leverage/derived-state.js';
+import { ImpactTestSelector } from '../verification/impact-test-selector.js';
+import { TestReliabilityLedger } from '../verification/test-reliability.js';
+import { WorkerPerformanceLedger } from '../scheduler/worker-performance.js';
+import { MicroShardPlanner } from '../patch/shard-planner.js';
+import { PatchFabric } from '../patch/patch-fabric.js';
 
 const host = process.env.MAXXED_CONTROL_HOST ?? '127.0.0.1';
 const port = Number(process.env.MAXXED_CONTROL_PORT ?? 7790);
 const adminToken = process.env.MAXXED_CONTROL_ADMIN_TOKEN ?? '';
 if (!adminToken) throw new Error('MAXXED_CONTROL_ADMIN_TOKEN is required');
 
-const statePath = process.env.MAXXED_CONTROL_STATE_PATH ?? path.join(os.homedir(), '.maxxed-control-plane', 'state.json');
-const leverageStatePath = process.env.MAXXED_LEVERAGE_STATE_PATH ?? path.join(os.homedir(), '.maxxed-control-plane', 'leverage.json');
+const stateDir = process.env.MAXXED_CONTROL_STATE_DIR ?? path.join(os.homedir(), '.maxxed-control-plane');
+const statePath = process.env.MAXXED_CONTROL_STATE_PATH ?? path.join(stateDir, 'state.json');
+const leverageStatePath = process.env.MAXXED_LEVERAGE_STATE_PATH ?? path.join(stateDir, 'leverage.json');
+const patchStatePath = process.env.MAXXED_PATCH_STATE_PATH ?? path.join(stateDir, 'patch-fabric.json');
+const artifactStorePath = process.env.MAXXED_ARTIFACT_STORE_PATH ?? path.join(stateDir, 'artifact-cas');
 const persistMs = Number(process.env.MAXXED_CONTROL_PERSIST_MS ?? 1000);
 const fabricUrl = process.env.MAXXED_FABRIC_URL ?? 'http://127.0.0.1:7788';
 const fabricAdminToken = process.env.MAXXED_FABRIC_ADMIN_TOKEN ?? '';
 const githubToken = process.env.MAXXED_GITHUB_TOKEN ?? '';
 const workerProvider = createFabricWorkerProvider({ baseUrl: fabricUrl, adminToken: fabricAdminToken });
 const fabricExecutionClient = fabricAdminToken ? new FabricExecutionClient({ baseUrl: fabricUrl, adminToken: fabricAdminToken }) : null;
+const workerPerformance = new WorkerPerformanceLedger();
 const runtime = new ControlPlaneRuntime({
   workerProvider,
   fabricExecutionClient,
+  schedulerOptions: { performanceLedger: workerPerformance },
   throughputOptions: {
     baselineConcurrency: Number(process.env.MAXXED_BASELINE_CONCURRENCY ?? 2),
     targetMultiplier: Number(process.env.MAXXED_TARGET_MULTIPLIER ?? 2),
@@ -51,6 +65,7 @@ const runtime = new ControlPlaneRuntime({
 
 const solutionCas = new SolutionCAS({ maxEntries: Number(process.env.MAXXED_SOLUTION_CACHE_MAX ?? 10000) });
 const artifactCache = new ArtifactCache({ maxEntries: Number(process.env.MAXXED_ARTIFACT_CACHE_MAX ?? 50000) });
+const artifactStore = new FileArtifactStore({ root: artifactStorePath, maxBytes: Number(process.env.MAXXED_ARTIFACT_STORE_MAX_BYTES ?? 20 * 1024 * 1024 * 1024) });
 const semanticGraph = new SemanticCodeGraph();
 const transforms = new TransformRegistry();
 const trajectoryHarvester = new TrajectoryHarvester({ maxRecords: Number(process.env.MAXXED_TRAJECTORY_MAX ?? 50000) });
@@ -60,18 +75,30 @@ const bottleneckOptimizer = new BottleneckOptimizer();
 const maintenancePlanner = new MaintenancePlanner();
 const replayProjector = defaultControlPlaneReplayProjector();
 const sourceIndexer = new SourceIndexer({ graph: semanticGraph });
+const codeIndexes = new CodeIndexAdapterRegistry();
+codeIndexes.register('scip', new ScipIndexAdapter({ graph: semanticGraph }));
 const contextCompiler = new ContextCompiler({ graph: semanticGraph, cas: solutionCas, repairs: repairMemory });
-const speculativePlanner = new SpeculativePlanner({ maxCandidates: Number(process.env.MAXXED_SPECULATIVE_MAX_CANDIDATES ?? 4) });
+const speculativePlanner = new SpeculativePlanner({ maxCandidates: Number(process.env.MAXXED_SPECULATIVE_MAX_CANDIDATES ?? 4), minValueToCostRatio: Number(process.env.MAXXED_SPECULATIVE_MIN_VALUE_COST ?? 3) });
+const impactTestSelector = new ImpactTestSelector({ graph: semanticGraph });
+const testReliability = new TestReliabilityLedger();
+const shardPlanner = new MicroShardPlanner();
+const patchFabric = new PatchFabric();
 const leverageEngine = new LeverageEngine({ cas: solutionCas, graph: semanticGraph, transforms, repairs: repairMemory });
 const leverage = new LeverageRuntimeAdapter({ runtime, engine: leverageEngine, cas: solutionCas, harvester: trajectoryHarvester, repairs: repairMemory });
-const leverageComponents = { leverage, solutionCas, artifactCache, semanticGraph, transforms, trajectoryHarvester, repairMemory, productFamilies, bottleneckOptimizer, maintenancePlanner, replayProjector, sourceIndexer, contextCompiler, speculativePlanner, leverageEngine };
+const derivedState = new DerivedStateManager({ solutionCas, artifactCache, semanticGraph, trajectoryHarvester, repairMemory });
+const leverageComponents = {
+  leverage, solutionCas, artifactCache, artifactStore, semanticGraph, transforms, trajectoryHarvester, repairMemory,
+  productFamilies, bottleneckOptimizer, maintenancePlanner, replayProjector, sourceIndexer, codeIndexes, contextCompiler,
+  speculativePlanner, impactTestSelector, testReliability, workerPerformance, shardPlanner, patchFabric, derivedState, leverageEngine
+};
 
 const store = new RuntimeStateStore(statePath);
 const leverageStore = new RuntimeStateStore(leverageStatePath);
+const patchStore = new RuntimeStateStore(patchStatePath);
 const restored = await store.load();
 if (restored) runtime.restore(restored);
 const restoredLeverage = await leverageStore.load();
-if ([1,2,3].includes(restoredLeverage?.version)) {
+if ([1,2,3,4].includes(restoredLeverage?.version)) {
   solutionCas.restore(restoredLeverage.solutionCas);
   artifactCache.restore(restoredLeverage.artifactCache);
   semanticGraph.restore(restoredLeverage.semanticGraph);
@@ -79,11 +106,16 @@ if ([1,2,3].includes(restoredLeverage?.version)) {
   repairMemory.restore(restoredLeverage.repairMemory);
   productFamilies.restore(restoredLeverage.productFamilies);
   transforms.restore(restoredLeverage.transforms);
+  if (restoredLeverage.workerPerformance) workerPerformance.restore(restoredLeverage.workerPerformance);
+  if (restoredLeverage.testReliability) testReliability.restore(restoredLeverage.testReliability);
 }
+for (const [family, baseline] of Object.entries(CANONICAL_PRODUCT_FAMILIES)) if (!productFamilies.baselines.has(family)) productFamilies.registerBaseline({ family, ...baseline });
+const restoredPatch = await patchStore.load();
+if (restoredPatch) patchFabric.restore(restoredPatch);
 
 const githubAdapter = githubToken ? new GitHubPullRequestAdapter({ token: githubToken }) : null;
 const promotion = githubAdapter ? new PullRequestPromotion({ runtime, adapter: githubAdapter }) : null;
-const codingLoop = fabricExecutionClient ? new AutonomousCodingLoop({ runtime, fabricClient: fabricExecutionClient, promotion, leverage, intervalMs: Number(process.env.MAXXED_CODING_LOOP_MS ?? 2_000) }) : null;
+const codingLoop = fabricExecutionClient ? new AutonomousCodingLoop({ runtime, fabricClient: fabricExecutionClient, promotion, leverage, workerPerformance, intervalMs: Number(process.env.MAXXED_CODING_LOOP_MS ?? 2_000) }) : null;
 const server = createControlPlaneServer({ runtime, adminToken, codingLoop, leverageComponents });
 let saving = false;
 const persist = async () => {
@@ -91,15 +123,18 @@ const persist = async () => {
   saving = true;
   try {
     await store.save(runtime.snapshot());
+    await patchStore.save(patchFabric.snapshot());
     await leverageStore.save({
-      version: 3,
+      version: 4,
       solutionCas: solutionCas.snapshot(),
       artifactCache: artifactCache.snapshot(),
       semanticGraph: semanticGraph.snapshot(),
       trajectories: trajectoryHarvester.snapshot(),
       repairMemory: repairMemory.snapshot(),
       productFamilies: productFamilies.snapshot(),
-      transforms: transforms.snapshot()
+      transforms: transforms.snapshot(),
+      workerPerformance: workerPerformance.snapshot(),
+      testReliability: testReliability.snapshot()
     });
   } catch (error) { console.error(JSON.stringify({ event: 'control-plane-persistence-failed', error: error.message })); }
   finally { saving = false; }
@@ -109,7 +144,7 @@ timer.unref();
 
 server.listen(port, host, () => {
   console.log(`maxxed engineering control plane listening on http://${host}:${port}`);
-  console.log(`leverage fabric active: solutions=${solutionCas.entries.size}, artifacts=${artifactCache.entries.size}, trajectories=${trajectoryHarvester.records.length}`);
+  console.log(`leverage fabric active: solutions=${solutionCas.entries.size}, artifacts=${artifactCache.entries.size}, trajectories=${trajectoryHarvester.records.length}, patchSessions=${patchFabric.sessions.size}`);
   if (codingLoop) {
     codingLoop.start();
     console.log(`autonomous coding loop active at ${runtime.throughput.targetMultiplier}x baseline target`);
