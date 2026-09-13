@@ -10,9 +10,23 @@ export class ModelRuntimeGovernor {
     const artifactSha256 = model?.metadata?.artifactSha256 ?? null;
     if (artifactSha256 && !/^[a-f0-9]{64}$/i.test(artifactSha256)) throw new Error(`invalid artifact sha256 for ${model.id}`);
     if (!this.state.has(model.id)) {
-      this.state.set(model.id, { modelId: model.id, maxConcurrency, inFlight: 0, consecutiveFailures: 0, circuitOpenUntil: 0, warm: false, lastHealthAt: null, lastHealthOk: null, artifactSha256 });
+      this.state.set(model.id, { modelId: model.id, maxConcurrency, inFlight: 0, consecutiveFailures: 0, circuitOpenUntil: 0, warm: false, lastHealthAt: null, lastHealthOk: null, artifactSha256, integrityOk: artifactSha256 ? null : true });
     }
     return this.get(model.id);
+  }
+
+  verifyArtifactIntegrity(modelId, measuredSha256) {
+    const value = this.#require(modelId);
+    if (!value.artifactSha256) {
+      value.integrityOk = true;
+      return true;
+    }
+    if (!/^[a-f0-9]{64}$/i.test(String(measuredSha256 ?? ''))) {
+      value.integrityOk = false;
+      return false;
+    }
+    value.integrityOk = value.artifactSha256.toLowerCase() === measuredSha256.toLowerCase();
+    return value.integrityOk;
   }
 
   healthResult(modelId, healthy, now = Date.now()) {
@@ -29,8 +43,21 @@ export class ModelRuntimeGovernor {
     return this.get(modelId);
   }
 
+  async warmupAll(registry, clientFactory, now = Date.now()) {
+    const results = [];
+    for (const model of registry.list().filter((candidate) => candidate.kind === 'local' && candidate.enabled)) {
+      if (!this.get(model.id)) this.register(model);
+      let healthy = false;
+      try { healthy = await clientFactory(model).health(); } catch { healthy = false; }
+      this.healthResult(model.id, healthy, now);
+      results.push({ modelId: model.id, healthy, runtime: this.get(model.id) });
+    }
+    return results;
+  }
+
   isAdmissible(modelId, now = Date.now()) {
     const value = this.#require(modelId);
+    if (value.integrityOk === false) return false;
     if (value.circuitOpenUntil > now) return false;
     return value.inFlight < value.maxConcurrency;
   }
@@ -62,7 +89,7 @@ export class ModelRuntimeGovernor {
 
   availableSlots(modelId, now = Date.now()) {
     const value = this.#require(modelId);
-    if (value.circuitOpenUntil > now) return 0;
+    if (!this.isAdmissible(modelId, now)) return 0;
     return Math.max(0, value.maxConcurrency - value.inFlight);
   }
 
