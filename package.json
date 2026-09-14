@@ -3,12 +3,17 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=22" },
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "start": "node src/service/main.js",
     "test": "node --test",
     "validate:completion": "node scripts/validate-completion.mjs",
     "validate:training": "node scripts/validate-training-data.mjs",
     "validate": "npm test && npm run validate:completion && npm run validate:training"
+  },
+  "dependencies": {
+    "pg": "^8.23.0"
   }
 }

@@ -15,16 +15,48 @@
     "train": "train/seed-v1.jsonl",
     "eval": "eval/seed-v1.jsonl"
   },
+  "domains": [
+    "coding",
+    "repository-understanding",
+    "infrastructure-diagnosis",
+    "business-reasoning",
+    "outreach-support",
+    "orchestration-agent-planning",
+    "security-reliability"
+  ],
+  "domain_policy": "Each dataset below is tagged with exactly one of the domains above and must not mix examples across domains within a single file. This control plane is the canonical owner of model training going forward; other systems (e.g. email-marketing's llm_control.training_examples) may be imported as a *source* for a domain's corpus but do not remain the architectural owner of that data once imported.",
   "record_schema": {
     "id": "string",
     "task_class": "string",
     "source_category": "string",
+    "domain": "string (one of `domains` above; required for datasets added after 2026-09-14)",
     "instruction": "string",
     "input": "object",
     "output": "object|string",
     "provenance": "object",
     "tags": "string[]"
   },
+  "datasets": [
+    {
+      "dataset_id": "maxxed-engineering-seed-v1",
+      "domain": "orchestration-agent-planning",
+      "train": "train/seed-v1.jsonl",
+      "eval": "eval/seed-v1.jsonl",
+      "source_system": "maxxed-engineering-control-plane",
+      "note": "Original seed corpus; domain assigned retroactively for the 7-domain taxonomy. Spans control-plane/scheduler/repair decisions, closest single fit is orchestration-agent-planning."
+    },
+    {
+      "dataset_id": "outreach-support-email-marketing-v1",
+      "domain": "outreach-support",
+      "train": "train/outreach-support-email-marketing-v1.jsonl",
+      "eval": "eval/outreach-support-email-marketing-v1.jsonl",
+      "source_system": "email-marketing",
+      "source_table": "llm_control.training_examples",
+      "imported_via": "scripts/import-training-examples-email-marketing.mjs",
+      "import_run_manifest": "import-runs/outreach-support-email-marketing-v1.json",
+      "note": "Read-only import of email-marketing's legacy training_examples table. Labels are transport-accepted only, not quality-evidenced (see email-marketing's CANONICAL_TRAINING_VERIFICATION_REPORT.md) -- treat as raw corpus material pending the ported evaluation/promotion gates, not as promotion-eligible data."
+    }
+  ],
   "provenance": {
     "control_plane_validated_sha": "264b5b36753968b8e8032c28d00150136bb1e526",
     "control_plane_retirement_sha": "5bb05aa39e3e487ccb1b210e668e2059b2188ff5",

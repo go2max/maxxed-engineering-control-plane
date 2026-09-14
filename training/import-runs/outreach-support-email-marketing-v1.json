@@ -1,0 +1,22 @@
+{
+  "dataset_version": "v1",
+  "domain": "outreach-support",
+  "source_system": "email-marketing",
+  "source_table": "llm_control.training_examples",
+  "imported_at": "2026-09-14T23:29:46.062Z",
+  "counts": {
+    "source_rows_read": 200,
+    "imported_train": 166,
+    "imported_eval": 34,
+    "skipped_duplicate": 0,
+    "skipped_excluded_or_unlabeled": 0
+  },
+  "content_hash": {
+    "train_sha256": "c1ba09ef3b8a3002179fa383feb06b54a750e50c10df5de813bd4c36005dfeb9",
+    "eval_sha256": "b58114cd5527d820802e2fec1237fc7c2ae4f2223af9b510525f8e1c80930d8b"
+  },
+  "caveats": [
+    "Source labels (good/bad/corrected) are transport-accepted only per email-marketing's own CANONICAL_TRAINING_VERIFICATION_REPORT.md; they are NOT evidence of output quality and must not be treated as a promotion-eligible gold/silver/bronze quality tier without independent evaluation.",
+    "This import is a raw provenance-tagged copy for corpus-building purposes; it does not run the eligibility/trust gates described in email-marketing's training-system architecture."
+  ]
+}
