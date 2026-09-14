@@ -36,6 +36,36 @@ test('authenticated API ingests and dispatches task while unauthorized access fa
   assert.equal(status.claims.active, 1);
 });
 
+test('schedule endpoint returns a read-only preview without claiming tasks', async (t) => {
+  const runtime = new ControlPlaneRuntime({ workerProvider: async () => [{ workerId: 'w1', state: 'AVAILABLE', capabilities: ['node'], capacity: { freeSlots: 1, freeMemoryMb: 4096 }, pressure: { cpuPct: 5 }, metadata: { os: 'linux', arch: 'x64' } }] });
+  const server = createControlPlaneServer({ runtime, adminToken: 'secret' });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  t.after(() => server.close());
+  const port = server.address().port;
+  const root = `http://127.0.0.1:${port}`;
+  const headers = { authorization: 'Bearer secret', 'content-type': 'application/json' };
+
+  await fetch(`${root}/tasks`, { method: 'POST', headers, body: JSON.stringify({ key: 't1', repository: 'go2max/demo', requirements: { capabilities: ['node'] } }) });
+
+  const unauthorized = await fetch(`${root}/schedule`);
+  assert.equal(unauthorized.status, 401);
+
+  const preview = await (await fetch(`${root}/schedule`, { headers })).json();
+  assert.equal(preview.authoritative, true);
+  assert.equal(preview.dispatches.length, 1);
+  assert.equal(preview.dispatches[0].taskKey, 't1');
+
+  // Preview must not mutate state: no claim should exist yet, and a second preview call
+  // must produce the same result (idempotent / side-effect free).
+  const status = await (await fetch(`${root}/status`, { headers })).json();
+  assert.equal(status.claims.active, 0);
+
+  const previewAgain = await (await fetch(`${root}/schedule`, { headers })).json();
+  assert.equal(previewAgain.dispatches.length, 1);
+  assert.equal(previewAgain.dispatches[0].taskKey, 't1');
+});
+
 test('operator command endpoint requires idempotency identity and rejects mismatches', async (t) => {
   const runtime = new ControlPlaneRuntime({ workerProvider: async () => [] });
   const server = createControlPlaneServer({ runtime, adminToken: 'secret' });

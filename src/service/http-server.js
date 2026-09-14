@@ -55,6 +55,7 @@ export function createControlPlaneServer({ runtime, adminToken, codingLoop = nul
       if (req.method === 'GET' && url.pathname === '/tasks') return send(res, 200, { tasks: runtime.graph.list() });
       if (req.method === 'GET' && url.pathname === '/claims') return send(res, 200, { claims: runtime.claims.list() });
       if (req.method === 'GET' && url.pathname === '/models') return send(res, 200, { models: runtime.status().models });
+      if (req.method === 'GET' && url.pathname === '/schedule') return send(res, 200, await runtime.schedulePreview());
       if (req.method === 'GET' && url.pathname === '/coding/status') return send(res, 200, { enabled: Boolean(codingLoop), running: Boolean(codingLoop?.running), lastTick: codingLoop?.lastTick ?? null, throughput: runtime.lastThroughputDecision });
       if (req.method === 'GET' && url.pathname === '/patch/status') return send(res, 200, leverageComponents?.patchFabric ? { sessions: leverageComponents.patchFabric.list() } : { enabled: false });
       if (req.method === 'GET' && url.pathname === '/leverage/status') return send(res, 200, leverage ? {

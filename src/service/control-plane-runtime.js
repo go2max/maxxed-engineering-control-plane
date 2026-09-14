@@ -70,6 +70,30 @@ export class ControlPlaneRuntime {
     }
   }
 
+  // Read-only scheduling projection: computes what the scheduler would dispatch right now
+  // without claiming tasks or mutating any state. Intended for external consumers (e.g.
+  // Tech-Site's operator/admin UI) that need scheduler intent/explanations but must not be
+  // able to author dispatch decisions themselves. See issue #48.
+  async schedulePreview(now = Date.now(), { taskPredicate = () => true } = {}) {
+    const workers = await this.workerProvider();
+    const activeClaims = this.claims.list().map((claim) => {
+      const task = this.graph.get(claim.taskKey);
+      return { taskKey: claim.taskKey, repository: task?.repository ?? null, workerId: claim.ownerId, stage: claim.stage };
+    });
+    const report = this.scheduler.planWithReport(workers, { now, activeClaims, taskPredicate, admissionDecision: this.lastThroughputDecision ?? {} });
+    return {
+      policyVersion: 'control-plane-portfolio-scheduler',
+      generatedAt: now,
+      authoritative: true,
+      dispatches: report.dispatches,
+      backpressure: report.backpressure,
+      adaptiveLimit: report.adaptiveLimit,
+      remainingLaneBudget: report.remainingLaneBudget,
+      rebalancing: report.rebalancing,
+      audit: report.audit
+    };
+  }
+
   async dispatchToFabric(now = Date.now()) {
     if (!this.fabricExecutionClient) throw new Error('fabric execution client is not configured');
     const dispatches = await this.dispatch(now, { taskPredicate: isCodingTask });
