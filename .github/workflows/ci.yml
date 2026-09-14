@@ -1,0 +1,53 @@
+name: CI
+
+# Fail-closed validation. All jobs run exclusively on this repository's local
+# self-hosted runner pool. There is no GitHub-hosted fallback: if no matching
+# self-hosted runner is registered, jobs queue rather than silently running
+# (and passing) on GitHub-hosted infrastructure.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: control-plane-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Test and validate
+    runs-on: [self-hosted, maxxed-linux]
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    env:
+      SHELL: /bin/bash
+    steps:
+      - name: Checkout exact commit under test
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+          show-progress: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          package-manager-cache: false
+
+      - name: Run test suite
+        run: npm test
+
+      - name: Run completion-tracker validation
+        run: npm run validate:completion
+
+      - name: Run training-data validation
+        run: npm run validate:training
