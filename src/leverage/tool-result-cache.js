@@ -27,6 +27,7 @@ export class ToolResultCache {
     if (cached && (!cached.expiresAt || cached.expiresAt > now) && cached.scopeFingerprint === (scopeFingerprint ?? null)) {
       cached.hits += 1;
       this.stats.hits += 1;
+      this._touch(key, cached);
       return { key, value: structuredClone(cached.value), hit: true, coalesced: false };
     }
     if (this.inFlight.has(key)) {
@@ -60,8 +61,23 @@ export class ToolResultCache {
       hits: 0,
       checksum: digest(value)
     };
+    this.entries.delete(key); // drop any stale position before re-inserting at the MRU end
     this.entries.set(key, row);
+    // Evict least-recently-used first: a Map iterates in insertion order, and _touch()
+    // (below) re-inserts an entry on every hit, so the front of iteration order is always
+    // the entry that has gone longest without being read or written (issue #94 harvest:
+    // adapted from isaacs/node-lru-cache's recency-list technique, see
+    // docs/harvest-notes/isaacs-node-lru-cache.md). Previously this evicted strict
+    // insertion order (FIFO), so a hot, frequently-read entry could still be evicted ahead
+    // of a stale one that just happened to be written later.
     while (this.entries.size > this.maxEntries) this.entries.delete(this.entries.keys().next().value);
+  }
+
+  // Moves `key` to the most-recently-used end of iteration order without changing its
+  // content, so a cache hit protects the entry from eviction the same way a write does.
+  _touch(key, row) {
+    this.entries.delete(key);
+    this.entries.set(key, row);
   }
 
   peek(input, now = Date.now()) {

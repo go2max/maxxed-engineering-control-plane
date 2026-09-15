@@ -117,6 +117,22 @@ test('a tampered snapshot entry is dropped on restore, not loaded (security revi
   assert.equal(restored.stats.quarantined, 1);
 });
 
+test('eviction is recency-based (LRU), not insertion-order (FIFO), on overflow (issue #94 harvest)', async () => {
+  const cache = new ToolResultCache({ maxEntries: 2 });
+  const load = async (n) => ({ n });
+  await cache.getOrLoad('a', () => load(1));
+  await cache.getOrLoad('b', () => load(2));
+  // Re-reading 'a' makes it more recently used than 'b', even though 'a' was written first.
+  const hitA = await cache.getOrLoad('a', () => load(1));
+  assert.equal(hitA.hit, true);
+  // Inserting a third entry must evict 'b' (the true LRU entry), not 'a' (insertion order
+  // would have evicted 'a' as the oldest write).
+  await cache.getOrLoad('c', () => load(3));
+  assert.equal(cache.entries.has('a'), true);
+  assert.equal(cache.entries.has('b'), false);
+  assert.equal(cache.entries.has('c'), true);
+});
+
 test('snapshot/restore round-trips entries and stats', async () => {
   const cache = new ToolResultCache();
   await cache.getOrLoad({ tool: 'a', scope: {}, params: {} }, async () => 1);

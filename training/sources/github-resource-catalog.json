@@ -1,0 +1,49 @@
+{
+  "$schema": "internal: harvest queue for issue #94 (End-to-end GitHub capability harvest)",
+  "notes": "Priority queue of external GitHub sources to run through the verify->understand->compare->refactor->prove->integrate workflow from issue #94. This file did not exist before the first harvest pass (see docs/harvest-notes/README.md); the 'disposition' field is new infrastructure added by that pass so triage state survives across passes instead of living only in PR descriptions.",
+  "dispositionValues": ["untriaged", "adopt", "adapt", "reference", "reject"],
+  "entries": [
+    {
+      "id": "isaacs-lru-cache",
+      "repo": "isaacs/node-lru-cache",
+      "url": "https://github.com/isaacs/node-lru-cache",
+      "category": "caching / distributed execution & scheduling primitives",
+      "priority": 1,
+      "reason": "Directly overlaps src/leverage/tool-result-cache.js, which currently does FIFO (insertion-order) eviction, not recency-based LRU, and just had a leak/poisoning fix land (#92). High-value, small, bounded technique to verify against.",
+      "disposition": "adapt",
+      "note": "docs/harvest-notes/isaacs-node-lru-cache.md",
+      "verifiedRevision": "npm lru-cache@11.5.2 / license BlueOak-1.0.0",
+      "verifiedAt": "2026-09-15"
+    },
+    {
+      "id": "langchain-langgraph",
+      "repo": "langchain-ai/langgraph",
+      "url": "https://github.com/langchain-ai/langgraph",
+      "category": "agent orchestration / state graphs / tool execution",
+      "priority": 2,
+      "reason": "Reference architecture for graph-based agent orchestration and checkpointing; overlaps src/leverage/execution-checkpoint.js and src/leverage/execution-replay.js. Large framework surface -> reference-only candidate, not adopt.",
+      "disposition": "untriaged",
+      "note": null
+    },
+    {
+      "id": "ragas",
+      "repo": "explodinggradients/ragas",
+      "url": "https://github.com/explodinggradients/ragas",
+      "category": "model and agent evaluation / RAG evaluation",
+      "priority": 3,
+      "reason": "Candidate reference for retrieval/generation eval metrics; compare against src/leverage/semantic-code-graph.js and training/eval harness.",
+      "disposition": "untriaged",
+      "note": null
+    },
+    {
+      "id": "sweagent",
+      "repo": "SWE-agent/SWE-agent",
+      "url": "https://github.com/SWE-agent/SWE-agent",
+      "category": "coding / repository-understanding evaluation",
+      "priority": 4,
+      "reason": "Repository-scoped agentic coding harness; compare against src/agents and src/leverage/source-indexer.js.",
+      "disposition": "untriaged",
+      "note": null
+    }
+  ]
+}
