@@ -20,7 +20,21 @@ function requirementMatch(worker, task) {
   return true;
 }
 
-export function scoreTask(graph, task, { now = Date.now(), starvationMs = 30 * 60_000, activeClaims = [], priorityAdjustment = 0 } = {}) {
+// Default scoring weights, unchanged from the original hardcoded coefficients below. Callers that
+// want to run a versioned scheduler-weight candidate (see src/scheduler/scheduler-weight-policy.js,
+// issue #101) pass an alternate `weights` object through `scoreTask`'s options; omitting it
+// preserves the exact prior behavior of this function bit-for-bit.
+export const DEFAULT_SCHEDULER_WEIGHTS = Object.freeze({
+  version: 1,
+  priorityWeight: 10,
+  unlockWeight: 20,
+  starvationStepWeight: 3,
+  riskPenaltyHigh: 25,
+  riskPenaltyCritical: 50,
+  failurePenaltyPerCount: 5,
+});
+
+export function scoreTask(graph, task, { now = Date.now(), starvationMs = 30 * 60_000, activeClaims = [], priorityAdjustment = 0, weights = DEFAULT_SCHEDULER_WEIGHTS } = {}) {
   const priority = Number(task.metadata?.priority ?? 0);
   const createdAt = Number(task.metadata?.createdAt ?? now);
   const ageMs = Math.max(0, now - createdAt);
@@ -28,9 +42,9 @@ export function scoreTask(graph, task, { now = Date.now(), starvationMs = 30 * 6
   const unlock = graph.unlockCount(task.key);
   const critical = criticalPathScore(graph, task.key);
   const fairness = portfolioFairnessPenalty(task, activeClaims);
-  const riskPenalty = task.riskClass === 'high' ? 25 : task.riskClass === 'critical' ? 50 : 0;
-  const failurePenalty = Number(task.metadata?.failureCount ?? 0) * 5;
-  const score = priority * 10 + priorityAdjustment + unlock * 20 + critical.score + starvationSteps * 3 - riskPenalty - failurePenalty - fairness.total;
+  const riskPenalty = task.riskClass === 'high' ? weights.riskPenaltyHigh : task.riskClass === 'critical' ? weights.riskPenaltyCritical : 0;
+  const failurePenalty = Number(task.metadata?.failureCount ?? 0) * weights.failurePenaltyPerCount;
+  const score = priority * weights.priorityWeight + priorityAdjustment + unlock * weights.unlockWeight + critical.score + starvationSteps * weights.starvationStepWeight - riskPenalty - failurePenalty - fairness.total;
   return { score, priority, priorityAdjustment, unlock, criticalDepth: critical.depth, criticalPathScore: critical.score, starvationSteps, riskPenalty, failurePenalty, fairness };
 }
 
@@ -50,7 +64,7 @@ export function adaptiveLaneCapacity(workers, hardLimit = 16) {
 }
 
 export class PortfolioScheduler {
-  constructor({ graph, repoLaneLimit = 2, totalLaneLimit = 16, repoLaneLimits = {}, policy = null, performanceLedger = null, heartbeatMonitor = null } = {}) {
+  constructor({ graph, repoLaneLimit = 2, totalLaneLimit = 16, repoLaneLimits = {}, policy = null, performanceLedger = null, heartbeatMonitor = null, weights = DEFAULT_SCHEDULER_WEIGHTS } = {}) {
     if (!graph) throw new Error('graph is required');
     this.graph = graph;
     this.repoLaneLimit = repoLaneLimit;
@@ -58,6 +72,11 @@ export class PortfolioScheduler {
     this.repoLaneLimits = { ...repoLaneLimits };
     this.policy = policy;
     this.performanceLedger = performanceLedger;
+    // Scoring weights are a versionable candidate (see scheduler-weight-policy.js, issue #101):
+    // not loaded from any registry here (that live-wiring step is deliberately out of scope for
+    // this PR, same not-collapsing-waves rule as policy-training-loop.js's own history), but any
+    // caller holding a PRODUCTION-stage PolicyRegistry candidate can pass its weights through here.
+    this.weights = weights;
     // Heartbeat suspicion withholds *new* dispatch only; it never revokes a lease a worker
     // already holds (ClaimAuthority remains the sole ownership authority - see issue #47).
     this.heartbeatMonitor = heartbeatMonitor;
@@ -105,7 +124,7 @@ export class PortfolioScheduler {
         policyBackpressure.push({ taskKey: task.key, repository: task.repository, reason: policy.reason, stage });
         return [];
       }
-      return [{ task, stage, packet, policy, scoring: scoreTask(this.graph, task, { now, activeClaims, priorityAdjustment: policy.priorityAdjustment }) }];
+      return [{ task, stage, packet, policy, scoring: scoreTask(this.graph, task, { now, activeClaims, priorityAdjustment: policy.priorityAdjustment, weights: this.weights }) }];
     }).sort((a, b) => b.scoring.score - a.scoring.score || a.task.key.localeCompare(b.task.key));
 
     const dispatches = [];
