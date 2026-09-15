@@ -21,6 +21,7 @@ import { MergeRiskClassifier } from '../economics/merge-risk-classifier.js';
 import { EconomicVerifier } from '../economics/economic-verifier.js';
 import { EconomicCertificateIssuer } from '../economics/economic-certificate-issuer.js';
 import { OutcomeRecorder } from '../training/outcome-recorder.js';
+import { PolicyTrainingLoop } from '../training/policy-training-loop.js';
 
 const isCodingTask = (task) => task?.metadata?.execution?.kind === 'coding-agent';
 const terminalFabricStates = new Set(['SUCCEEDED', 'FAILED', 'RECONCILE']);
@@ -46,7 +47,15 @@ export class ControlPlaneRuntime {
     // rejected trajectories to disk. Pass `outcomeLogPath: null` (or outcomeRecorder: null) to
     // disable, e.g. in tests that don't want filesystem writes.
     outcomeLogPath = 'var/training/outcomes.jsonl',
-    outcomeRecorder = outcomeLogPath ? new OutcomeRecorder({ logPath: outcomeLogPath }) : null
+    outcomeRecorder = outcomeLogPath ? new OutcomeRecorder({ logPath: outcomeLogPath }) : null,
+    // Issue #71/#73 gap closer: drives the OFFLINE_REPLAY -> SHADOW -> BENCHMARK stages of the
+    // policy-promotion stage machine (src/training/policy-promotion.js) from real recorded
+    // outcomes on each `syncPolicyTraining()` call (wired into the coding loop's periodic tick,
+    // see AutonomousCodingLoop). On by default whenever outcome recording itself is on -- this is
+    // pure analysis/candidate-building, never live authority: it never calls recordCanaryResult or
+    // finalizePromotion, so CANARY and PROMOTION_GATE -> PRODUCTION still require the existing
+    // explicit approval step untouched. Pass `policyTrainingLoop: null` to disable.
+    policyTrainingLoop = outcomeLogPath ? new PolicyTrainingLoop({ outcomeLogPath }) : null
   } = {}) {
     this.graph = new TaskGraph(); this.claims = new ClaimAuthority(); this.repairs = new RepairController(); this.verifier = new AcceptanceVerifier();
     this.verificationLedger = new VerificationLedger(); this.policy = new SchedulerPolicy(); this.journal = new EventJournal();
@@ -57,7 +66,7 @@ export class ControlPlaneRuntime {
     this.modelPool = new LocalModelExecutionPool({ registry: this.modelRegistry, router: this.modelRouter, governor: this.modelGovernor, clientFactory: this.modelClientFactory });
     this.modelDiscovery = new ModelFabricDiscovery({ registry: this.modelRegistry, governor: this.modelGovernor });
     this.scheduler = new PortfolioScheduler({ graph: this.graph, policy: this.policy, ...schedulerOptions });
-    this.riskClassifier = riskClassifier; this.economicVerifier = economicVerifier; this.outcomeRecorder = outcomeRecorder; this.certificateIssuer = certificateIssuer;
+    this.riskClassifier = riskClassifier; this.economicVerifier = economicVerifier; this.outcomeRecorder = outcomeRecorder; this.certificateIssuer = certificateIssuer; this.policyTrainingLoop = policyTrainingLoop;
     this.orchestrator = new EngineeringOrchestrator({ graph: this.graph, scheduler: this.scheduler, claims: this.claims, verifier: this.verifier, repairs: this.repairs, modelRouter: this.modelRouter, verificationLedger: this.verificationLedger, riskClassifier: this.riskClassifier, economicVerifier: this.economicVerifier, outcomeRecorder: this.outcomeRecorder, certificateIssuer: this.certificateIssuer });
     this.workerProvider = workerProvider; this.fabricExecutionClient = fabricExecutionClient; this.throughput = new ThroughputGovernor(throughputOptions);
     this.fabricParentClaimTtlMs = Math.max(5_000, Number(fabricParentClaimTtlMs ?? 30_000));
@@ -216,6 +225,16 @@ export class ControlPlaneRuntime {
   complete(payload, { idempotencyKey = null, now = Date.now() } = {}) { return this.journal.once(idempotencyKey, payload, () => { const result = this.orchestrator.complete({ ...payload, now }); this.journal.append('task.completed', { taskKey: payload.taskKey, verdict: result.verification?.verdict ?? null, action: result.decision?.action ?? null }, now); return result; }); }
   resolveVerificationGate(payload, now = Date.now()) { const result = this.orchestrator.resolveVerificationGate({ ...payload, now }); this.journal.append('verification.gate.resolved', { taskKey: payload.taskKey, repairTaskKey: payload.repairTaskKey ?? null, reconciliation: Boolean(payload.reconciliationEvidence) }, now); return result; }
   recoverExpired(now = Date.now()) { const expired = this.orchestrator.recoverExpired(now); if (expired.length) this.journal.append('claims.recovered', { claimIds: expired.map((entry) => entry.claimId), taskKeys: expired.map((entry) => entry.taskKey) }, now); return expired; }
+
+  // Issue #71/#73: advance any in-flight learned-policy candidates (per task class) through
+  // OFFLINE_REPLAY -> SHADOW -> BENCHMARK from real recorded outcomes. See PolicyTrainingLoop.sync
+  // for exactly what this does and does not touch (never CANARY or PROMOTION_GATE -> PRODUCTION).
+  syncPolicyTraining(now = Date.now()) {
+    if (!this.policyTrainingLoop) return [];
+    const actions = this.policyTrainingLoop.sync(now);
+    if (actions.length) this.journal.append('policy-training.synced', { actions }, now);
+    return actions;
+  }
   async warmupModels(now = Date.now()) { const results = await this.modelGovernor.warmupAll(this.modelRegistry, this.modelClientFactory, now); this.journal.append('models.warmup', { results: results.map(({ modelId, healthy }) => ({ modelId, healthy })) }, now); return results; }
 
   async executeModel({ request, messages, temperature = 0, maxTokens = 2048, now = Date.now() } = {}) {
