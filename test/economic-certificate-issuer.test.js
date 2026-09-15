@@ -171,8 +171,11 @@ test('the issuer never self-certifies: issuer identity colliding with implemente
 
 test('issuer internal failure never fabricates a pass -- returns null', () => {
   const issuer = new EconomicCertificateIssuer({ policyVersion: 'v1' });
-  // Malformed evidence that would throw deep inside amplification/measurement math.
-  const task = { key: 't1', metadata: { execution: { ref: SHA_A }, economics: { evidence: { shards: 'not-an-array-and-not-object' } } } };
+  // forceCertificate ensures the issuer proceeds past the C0-C2 no-op short-circuit regardless of
+  // classification, so this test genuinely exercises the internal try/catch rather than
+  // incidentally returning null via an unrelated early-out. `shards: [null]` throws deep inside
+  // amplification/measurement math (a null shard has no properties to read).
+  const task = { key: 't1', metadata: { execution: { ref: SHA_A }, economics: { forceCertificate: true, evidence: { shards: [null] } } } };
   const evidence = { producerId: 'agent-1', verifierId: 'verifier-1', artifacts: { commitSha: SHA_B } };
   const issued = issuer.issue({ task, evidence, claim: { ownerId: 'other' } });
   assert.equal(issued, null);

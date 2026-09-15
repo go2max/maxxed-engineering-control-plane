@@ -59,4 +59,4 @@ jobs:
           script: |
             const { execFileSync } = require('node:child_process');
             const body = context.payload.pull_request?.body ?? '';
-            execFileSync(process.execPath, ['scripts/check-reuse-gate.mjs', '-'], { input: body, stdio: 'inherit' });
+            execFileSync(process.execPath, ['scripts/check-reuse-gate.mjs', '-'], { input: body, stdio: ['pipe', 'inherit', 'inherit'] });
