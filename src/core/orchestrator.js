@@ -3,9 +3,14 @@ import { RepairAction } from '../verification/repair-controller.js';
 import { buildEvidenceBundle, buildReconciliationRequirement, synthesizeRepairTask } from '../verification/evidence-bundle.js';
 import { EngineeringTraceLedger, TraceDisposition } from '../telemetry/engineering-trace.js';
 import { workPacketClaimScope, workPacketView } from '../scheduler/work-packet-adapter.js';
+import { evaluateMergeEconomics } from '../economics/merge-economic-gate.js';
+import { trajectoryFromCompletion } from '../training/outcome-recorder.js';
 
 export class EngineeringOrchestrator {
-  constructor({ graph, scheduler, claims, verifier, repairs, modelRouter, verificationLedger = null, telemetry = new EngineeringTraceLedger() } = {}) {
+  constructor({
+    graph, scheduler, claims, verifier, repairs, modelRouter, verificationLedger = null, telemetry = new EngineeringTraceLedger(),
+    riskClassifier = null, economicVerifier = null, outcomeRecorder = null
+  } = {}) {
     if (!graph || !scheduler || !claims || !verifier || !repairs) throw new Error('graph, scheduler, claims, verifier and repairs are required');
     this.graph = graph;
     this.scheduler = scheduler;
@@ -15,6 +20,14 @@ export class EngineeringOrchestrator {
     this.modelRouter = modelRouter ?? null;
     this.verificationLedger = verificationLedger;
     this.telemetry = telemetry;
+    // Issue #68: independent economic-acceptance authority. When both are supplied, every real
+    // merge (a SHA-addressed commit candidate) is classified and, for C3+, gated live and
+    // fail-closed in `complete()` below -- see evaluateMergeEconomics / merge-economic-gate.js.
+    this.riskClassifier = riskClassifier;
+    this.economicVerifier = economicVerifier;
+    // Issue #71: accepted/rejected-outcome learning store. Purely observational -- see
+    // OutcomeRecorder's contract that a recording failure never affects the accept/reject path.
+    this.outcomeRecorder = outcomeRecorder;
   }
 
   dispatch(workers, { now = Date.now(), taskPredicate = () => true, admissionDecision = {} } = {}) {
@@ -54,13 +67,39 @@ export class EngineeringOrchestrator {
     const bundle = buildEvidenceBundle({ taskKey, acceptance, evidence, verification, producerId: evidence?.producerId ?? claim.ownerId, verifierId: evidence?.verifierId ?? null, now });
     const decision = this.repairs.decide(taskKey, verification);
     let repairTask = null;
+    let economicGate = null;
     let reconciliation = null;
 
     if (decision.action === RepairAction.ACCEPT) {
-      this.graph.setState(taskKey, TaskState.ACCEPTED, { verification, evidenceBundle: bundle });
+      // Issue #68 fail-closed economic gate: applies only to real, SHA-addressed merges (see
+      // evaluateMergeEconomics -- returns null and is a no-op for everything else, so C0-C2 and
+      // non-merge task completions are entirely unaffected). A C3+ merge with no validly bound
+      // EconomicImpactCertificate (or any other non-ACCEPT verdict from the independent
+      // EconomicVerifier) is rejected here, live and blocking -- it is never allowed to reach
+      // TaskState.ACCEPTED on functional verification alone.
+      economicGate = evaluateMergeEconomics({ task, claim, evidence, riskClassifier: this.riskClassifier, economicVerifier: this.economicVerifier });
+      if (economicGate && economicGate.verdict.verdict !== 'ACCEPT') {
+        this.graph.setState(taskKey, TaskState.BLOCKED, {
+          reason: 'economic-verification-failed', verification, evidenceBundle: bundle, economicGate
+        });
+        this.#record({
+          taskKey, kind: 'economic-verification-blocked', verdict: verification.verdict, action: 'ECONOMIC_REJECT',
+          evidenceDigest: bundle.digest, metadata: { riskClass: economicGate.classification.class, reasons: economicGate.classification.reasons, econVerdict: economicGate.verdict.verdict, econReason: economicGate.verdict.reason }
+        }, now);
+        this.#trace(task, {
+          name: 'control.task.economic-block', lane: task.metadata?.lane, stage: 'economic-verification', workerId: claim.ownerId,
+          startedAt: evidence?.startedAt ?? task.updatedAt ?? now, completedAt: now, outcome: 'BLOCKED', disposition: TraceDisposition.WAITING,
+          attributes: { evidenceDigest: bundle.digest, riskClass: economicGate.classification.class, reasons: economicGate.classification.reasons, econVerdict: economicGate.verdict.verdict, econReason: economicGate.verdict.reason, sourceSha: economicGate.sourceSha, candidateSha: economicGate.candidateSha }
+        });
+        this.claims.release(claim);
+        this.#recordOutcome(trajectoryFromCompletion({ task, claim, evidence, verification, finalAcceptance: 'rejected', economicGate, startedAt: evidence?.startedAt, now }));
+        return { verification, decision: { ...decision, action: 'ECONOMIC_REJECT' }, evidenceBundle: bundle, repairTask, reconciliation, economicGate, task: this.graph.get(taskKey) };
+      }
+      this.graph.setState(taskKey, TaskState.ACCEPTED, { verification, evidenceBundle: bundle, ...(economicGate ? { economicGate } : {}) });
       this.#record({ taskKey, kind: 'acceptance', verdict: verification.verdict, action: decision.action, evidenceDigest: bundle.digest }, now);
-      this.#trace(task, { name: 'control.task.accept', lane: task.metadata?.lane, stage: 'verification', workerId: claim.ownerId, startedAt: evidence?.startedAt ?? task.updatedAt ?? now, firstOutputAt: evidence?.firstOutputAt ?? null, completedAt: now, outcome: 'ACCEPTED', disposition: TraceDisposition.PRODUCTIVE, model: evidence?.model ?? null, provider: evidence?.provider ?? null, usage: evidence?.usage ?? null, costUsd: evidence?.costUsd ?? null, attributes: { evidenceDigest: bundle.digest, verdict: verification.verdict } });
+      this.#trace(task, { name: 'control.task.accept', lane: task.metadata?.lane, stage: 'verification', workerId: claim.ownerId, startedAt: evidence?.startedAt ?? task.updatedAt ?? now, firstOutputAt: evidence?.firstOutputAt ?? null, completedAt: now, outcome: 'ACCEPTED', disposition: TraceDisposition.PRODUCTIVE, model: evidence?.model ?? null, provider: evidence?.provider ?? null, usage: evidence?.usage ?? null, costUsd: evidence?.costUsd ?? null, attributes: { evidenceDigest: bundle.digest, verdict: verification.verdict, ...(economicGate ? { riskClass: economicGate.classification.class } : {}) } });
       this.claims.release(claim);
+      this.#recordOutcome(trajectoryFromCompletion({ task, claim, evidence, verification, finalAcceptance: 'accepted', economicGate, startedAt: evidence?.startedAt, now }));
     } else if (decision.action === RepairAction.RETRY_REPAIR) {
       const attempt = Number(decision.history?.attempts ?? 1);
       repairTask = synthesizeRepairTask({ task, verification, evidence, attempt });
@@ -80,8 +119,9 @@ export class EngineeringOrchestrator {
       this.#record({ taskKey, kind: 'terminal-failure', verdict: verification.verdict, action: decision.action, evidenceDigest: bundle.digest }, now);
       this.#trace(task, { name: 'control.task.failure', lane: task.metadata?.lane, stage: 'terminal-failure', workerId: claim.ownerId, startedAt: evidence?.startedAt ?? now, completedAt: now, outcome: 'FAILED', disposition: TraceDisposition.FAILED, attributes: { evidenceDigest: bundle.digest } });
       this.claims.release(claim);
+      this.#recordOutcome(trajectoryFromCompletion({ task, claim, evidence, verification, finalAcceptance: 'rejected', startedAt: evidence?.startedAt, now }));
     }
-    return { verification, decision, evidenceBundle: bundle, repairTask, reconciliation, task: this.graph.get(taskKey) };
+    return { verification, decision, evidenceBundle: bundle, repairTask, reconciliation, economicGate, task: this.graph.get(taskKey) };
   }
 
   resolveVerificationGate({ taskKey, repairTaskKey = null, reconciliationEvidence = null, now = Date.now() } = {}) {
@@ -98,6 +138,7 @@ export class EngineeringOrchestrator {
         this.graph.setState(taskKey, TaskState.ACCEPTED, { reason: 'accepted coding repair satisfied parent acceptance', repairTaskKey, verification: acceptedRepair?.verification ?? null, evidenceBundle: acceptedRepair?.evidenceBundle ?? null });
         this.#record({ taskKey, kind: 'repair-gate-accepted', action: 'ACCEPT', relatedTaskKey: repairTaskKey, evidenceDigest: acceptedRepair?.evidenceBundle?.digest ?? null }, now);
         this.#trace(task, { name: 'control.task.repair-gate', lane: task.metadata?.lane, stage: 'repair-gate', startedAt: now, completedAt: now, outcome: 'ACCEPTED', disposition: TraceDisposition.RECOVERY, attributes: { repairTaskKey } });
+        this.#recordOutcome(trajectoryFromCompletion({ task, evidence: acceptedRepair?.evidenceBundle?.payload?.evidence ?? {}, verification: acceptedRepair?.verification ?? {}, finalAcceptance: 'accepted', now }));
         return this.graph.get(taskKey);
       }
       this.graph.setState(taskKey, TaskState.READY, { reason: 'accepted repair completed', repairTaskKey });
@@ -129,6 +170,12 @@ export class EngineeringOrchestrator {
   }
 
   #record(entry, now) { return this.verificationLedger?.record(entry, now) ?? null; }
+  #recordOutcome(raw) {
+    // Outcome recording is purely observational (issue #71): a broken/misbehaving recorder must
+    // never be able to affect the real accept/reject decision, so this is defensively wrapped in
+    // addition to OutcomeRecorder's own internal try/catch.
+    try { return this.outcomeRecorder?.record(raw) ?? null; } catch { return null; }
+  }
   #trace(task, input) {
     return this.telemetry?.record({ ...input, traceId: input.traceId ?? task?.metadata?.telemetry?.traceId, parentSpanId: input.parentSpanId ?? task?.metadata?.telemetry?.spanId ?? null, taskKey: task?.key, repository: task?.repository, branch: task?.metadata?.branch ?? null, commitSha: task?.metadata?.commitSha ?? null, prNumber: task?.metadata?.prNumber ?? null }) ?? null;
   }

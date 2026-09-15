@@ -17,12 +17,30 @@ import { LocalInferenceClient } from '../models/local-inference-client.js';
 import { restoreRuntime, snapshotRuntime } from '../core/runtime-state.js';
 import { fabricTaskFromDispatch } from '../agents/coding-task.js';
 import { evidenceFromFabricResult } from './fabric-execution-client.js';
+import { MergeRiskClassifier } from '../economics/merge-risk-classifier.js';
+import { EconomicVerifier } from '../economics/economic-verifier.js';
+import { OutcomeRecorder } from '../training/outcome-recorder.js';
 
 const isCodingTask = (task) => task?.metadata?.execution?.kind === 'coding-agent';
 const terminalFabricStates = new Set(['SUCCEEDED', 'FAILED', 'RECONCILE']);
 
 export class ControlPlaneRuntime {
-  constructor({ workerProvider = async () => [], schedulerOptions = {}, modelDefinitions = [], modelClientFactory = null, fabricExecutionClient = null, throughputOptions = {}, fabricParentClaimTtlMs = 30_000 } = {}) {
+  constructor({
+    workerProvider = async () => [], schedulerOptions = {}, modelDefinitions = [], modelClientFactory = null, fabricExecutionClient = null,
+    throughputOptions = {}, fabricParentClaimTtlMs = 30_000,
+    // Issue #68: live, fail-closed merge-risk classification + independent economic verification.
+    // On by default -- this is real accept/reject-affecting behavior, not shadow mode. Pass
+    // `economicPolicyVersion: null` (or riskClassifier/economicVerifier: null) only for tests that
+    // intentionally want the gate disabled.
+    economicPolicyVersion = 'control-plane-economics-v1', economicEscalationThresholdUsd = 25,
+    riskClassifier = economicPolicyVersion ? new MergeRiskClassifier() : null,
+    economicVerifier = economicPolicyVersion ? new EconomicVerifier({ policyVersion: economicPolicyVersion, escalationThresholdUsd: economicEscalationThresholdUsd }) : null,
+    // Issue #71: accepted/rejected-outcome learning store. On by default, writing real accepted and
+    // rejected trajectories to disk. Pass `outcomeLogPath: null` (or outcomeRecorder: null) to
+    // disable, e.g. in tests that don't want filesystem writes.
+    outcomeLogPath = 'var/training/outcomes.jsonl',
+    outcomeRecorder = outcomeLogPath ? new OutcomeRecorder({ logPath: outcomeLogPath }) : null
+  } = {}) {
     this.graph = new TaskGraph(); this.claims = new ClaimAuthority(); this.repairs = new RepairController(); this.verifier = new AcceptanceVerifier();
     this.verificationLedger = new VerificationLedger(); this.policy = new SchedulerPolicy(); this.journal = new EventJournal();
     this.modelRegistry = new ModelRegistry(); this.modelEvals = new ModelEvalLedger(); this.modelGovernor = new ModelRuntimeGovernor();
@@ -32,7 +50,8 @@ export class ControlPlaneRuntime {
     this.modelPool = new LocalModelExecutionPool({ registry: this.modelRegistry, router: this.modelRouter, governor: this.modelGovernor, clientFactory: this.modelClientFactory });
     this.modelDiscovery = new ModelFabricDiscovery({ registry: this.modelRegistry, governor: this.modelGovernor });
     this.scheduler = new PortfolioScheduler({ graph: this.graph, policy: this.policy, ...schedulerOptions });
-    this.orchestrator = new EngineeringOrchestrator({ graph: this.graph, scheduler: this.scheduler, claims: this.claims, verifier: this.verifier, repairs: this.repairs, modelRouter: this.modelRouter, verificationLedger: this.verificationLedger });
+    this.riskClassifier = riskClassifier; this.economicVerifier = economicVerifier; this.outcomeRecorder = outcomeRecorder;
+    this.orchestrator = new EngineeringOrchestrator({ graph: this.graph, scheduler: this.scheduler, claims: this.claims, verifier: this.verifier, repairs: this.repairs, modelRouter: this.modelRouter, verificationLedger: this.verificationLedger, riskClassifier: this.riskClassifier, economicVerifier: this.economicVerifier, outcomeRecorder: this.outcomeRecorder });
     this.workerProvider = workerProvider; this.fabricExecutionClient = fabricExecutionClient; this.throughput = new ThroughputGovernor(throughputOptions);
     this.fabricParentClaimTtlMs = Math.max(5_000, Number(fabricParentClaimTtlMs ?? 30_000));
     this.paused = false; this.restoredAt = null; this.lastModelDiscovery = null; this.lastThroughputDecision = null; this.lastFabricLeaseReconciliation = null;
