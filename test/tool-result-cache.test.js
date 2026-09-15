@@ -71,6 +71,52 @@ test('verify quarantines a tampered/corrupted entry', async () => {
   assert.equal(cache.stats.quarantined, 1);
 });
 
+test('an unscoped entry does not satisfy a scoped lookup (security review finding 5)', async () => {
+  const cache = new ToolResultCache();
+  let calls = 0;
+  const load = async () => { calls += 1; return { calls }; };
+  const input = { tool: 'file.read', scope: { repo: 'r1' }, params: { path: 'a.js' } };
+  // Stored without a scopeFingerprint, as every current caller does.
+  await cache.getOrLoad(input, load);
+  assert.equal(calls, 1);
+  // A future scoped lookup must NOT be served the unscoped entry.
+  const scoped = await cache.getOrLoad(input, load, { scopeFingerprint: 'sha-1' });
+  assert.equal(calls, 2);
+  assert.equal(scoped.hit, false);
+});
+
+test('a scoped entry does not satisfy a differently-scoped or unscoped lookup', async () => {
+  const cache = new ToolResultCache();
+  let calls = 0;
+  const load = async () => { calls += 1; return { calls }; };
+  const input = { tool: 'file.read', scope: { repo: 'r1' }, params: { path: 'a.js' } };
+  await cache.getOrLoad(input, load, { scopeFingerprint: 'sha-1' });
+  assert.equal(calls, 1);
+  // An unscoped lookup must not be served the scoped entry.
+  const unscoped = await cache.getOrLoad(input, load);
+  assert.equal(calls, 2);
+  assert.equal(unscoped.hit, false);
+});
+
+test('a tampered snapshot entry is dropped on restore, not loaded (security review finding 6)', async () => {
+  const cache = new ToolResultCache();
+  await cache.getOrLoad({ tool: 'good', scope: {}, params: {} }, async () => ({ n: 1 }));
+  await cache.getOrLoad({ tool: 'poisoned', scope: {}, params: {} }, async () => ({ n: 2 }));
+  const snap = cache.snapshot();
+  const poisonedKey = toolCacheKey({ tool: 'poisoned', scope: {}, params: {} });
+  const poisonedRow = snap.entries.find((row) => row.key === poisonedKey);
+  // Simulate a snapshot poisoned/corrupted outside this process: value and checksum disagree.
+  poisonedRow.value = { n: 999 };
+
+  const restored = new ToolResultCache();
+  restored.restore(snap);
+  assert.equal(restored.entries.size, 1);
+  assert.equal(restored.entries.has(poisonedKey), false);
+  const goodKey = toolCacheKey({ tool: 'good', scope: {}, params: {} });
+  assert.equal(restored.entries.has(goodKey), true);
+  assert.equal(restored.stats.quarantined, 1);
+});
+
 test('snapshot/restore round-trips entries and stats', async () => {
   const cache = new ToolResultCache();
   await cache.getOrLoad({ tool: 'a', scope: {}, params: {} }, async () => 1);
