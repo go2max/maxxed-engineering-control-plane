@@ -22,9 +22,9 @@ test('loop submits coding tasks and leaves non-coding tasks untouched', async ()
   const enqueued = [];
   const fabric = { enqueue: async (task) => { enqueued.push(task); return task; }, fleet: async () => ({ tasks: [] }) };
   const runtime = new ControlPlaneRuntime({ workerProvider: async () => [worker()], fabricExecutionClient: fabric, throughputOptions: { baselineConcurrency: 1, targetMultiplier: 2, maxConcurrency: 4 } });
-  runtime.ingest(compileCodingTask({ key: 'code-1', repository: 'r1', repoPath: '/repo1', objective: 'one' }));
-  runtime.ingest(compileCodingTask({ key: 'code-2', repository: 'r2', repoPath: '/repo2', objective: 'two' }));
-  runtime.ingest({ key: 'other', repository: 'r3', objective: 'not for coding executor', state: 'READY' });
+  runtime.ingest(compileCodingTask({ key: 'code-1', repository: 'o/r1', repoPath: '/repo1', objective: 'one' }));
+  runtime.ingest(compileCodingTask({ key: 'code-2', repository: 'o/r2', repoPath: '/repo2', objective: 'two' }));
+  runtime.ingest({ key: 'other', repository: 'o/r3', objective: 'not for coding executor', state: 'READY' });
   const loop = new AutonomousCodingLoop({ runtime, fabricClient: fabric, now: () => 1000 });
   const result = await loop.tick();
   assert.equal(result.submitted.length, 2);
@@ -37,8 +37,8 @@ test('dispatchToFabric never claims unrelated executor types', async () => {
   const enqueued = [];
   const fabric = { enqueue: async (task) => { enqueued.push(task); return task; }, fleet: async () => ({ tasks: [] }) };
   const runtime = new ControlPlaneRuntime({ workerProvider: async () => [worker()], fabricExecutionClient: fabric, throughputOptions: { baselineConcurrency: 1, targetMultiplier: 2 } });
-  runtime.ingest(compileCodingTask({ key: 'code-1', repository: 'r1', repoPath: '/repo1', objective: 'one' }));
-  runtime.ingest({ key: 'other', repository: 'r2', objective: 'other executor', state: 'READY' });
+  runtime.ingest(compileCodingTask({ key: 'code-1', repository: 'o/r1', repoPath: '/repo1', objective: 'one' }));
+  runtime.ingest({ key: 'other', repository: 'o/r2', objective: 'other executor', state: 'READY' });
   const submitted = await runtime.dispatchToFabric(1000);
   assert.equal(submitted.length, 1);
   assert.equal(enqueued.length, 1);
@@ -57,7 +57,7 @@ test('fabric success reconciles through acceptance and records branch evidence',
   let terminal = [];
   const fabric = { enqueue: async (task) => task, fleet: async () => ({ tasks: terminal }) };
   const runtime = new ControlPlaneRuntime({ workerProvider: async () => [worker('w1', 1)], fabricExecutionClient: fabric, throughputOptions: { baselineConcurrency: 1, targetMultiplier: 2 } });
-  runtime.ingest(compileCodingTask({ key: 'code-1', repository: 'r1', repoPath: '/repo1', objective: 'one', acceptance: { requiredChecks: ['unit'] } }));
+  runtime.ingest(compileCodingTask({ key: 'code-1', repository: 'o/r1', repoPath: '/repo1', objective: 'one', acceptance: { requiredChecks: ['unit'] } }));
   const loop = new AutonomousCodingLoop({ runtime, fabricClient: fabric, now: () => 1000 });
   const first = await loop.tick();
   const fabricTask = first.submitted[0];
@@ -76,7 +76,7 @@ test('accepted coding repair automatically accepts parent with repair evidence',
   let terminal = [];
   const fabric = { enqueue: async (task) => task, fleet: async () => ({ tasks: terminal }) };
   const runtime = new ControlPlaneRuntime({ workerProvider: async () => [worker('w1', 1)], fabricExecutionClient: fabric, throughputOptions: { baselineConcurrency: 1, targetMultiplier: 2 } });
-  runtime.ingest(compileCodingTask({ key: 'code-repair', repository: 'r1', repoPath: '/repo1', objective: 'fix unit', acceptance: { requiredChecks: ['unit'] }, testCommands: [{ name: 'unit', command: 'npm', args: ['test'] }] }));
+  runtime.ingest(compileCodingTask({ key: 'code-repair', repository: 'o/r1', repoPath: '/repo1', objective: 'fix unit', acceptance: { requiredChecks: ['unit'] }, testCommands: [{ name: 'unit', command: 'npm', args: ['test'] }] }));
 
   const firstDispatch = await runtime.dispatchToFabric(1000);
   const originalClaim = runtime.claims.list()[0];

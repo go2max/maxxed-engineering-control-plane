@@ -1,0 +1,3 @@
+{"id": "os-001", "domain": "outreach-support", "task_class": "reply-classification", "instruction": "Classify this reply: 'Not interested, please remove me from this list.'", "input": {}, "expected": {"category": "opt-out"}}
+{"id": "os-002", "domain": "outreach-support", "task_class": "tone-check", "instruction": "Is this outreach message compliant with a professional, non-pushy tone policy?", "input": {"message": "Following up once more -- let me know if you're interested!"}, "expected": {"compliant": true}}
+{"id": "os-003", "domain": "outreach-support", "task_class": "escalation", "instruction": "A recipient replied with a complaint about spam. What's the correct next action?", "input": {}, "expected": {"action": "suppress-and-escalate", "must_not": ["reply-again"]}}

@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "domain": "coding",
+  "benchmark_id": "coding-seed-v1",
+  "primary_metric": "taskSuccessRate",
+  "cases_file": "cases.jsonl",
+  "case_count": 3,
+  "status": "seed",
+  "note": "Seed-sized held-out eval set for the promotion-gate mechanism (see src/training/promotion-gate.js and docs/training/EVALUATION_PROMOTION_PORT_DESIGN.md). Mechanism-first: expand case count before using this for a real promotion decision."
+}

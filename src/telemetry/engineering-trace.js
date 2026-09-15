@@ -79,7 +79,7 @@ export class EngineeringTraceLedger {
     return structuredClone(span);
   }
   list({ traceId = null, taskKey = null, after = 0 } = {}) {
-    return this.spans.filter((span) => (!traceId || span.traceId === traceId) && (!taskKey || span.taskKey === taskKey) && Number(span.completedAt ?? span.startedAt ?? 0) >= after).map(structuredClone);
+    return this.spans.filter((span) => (!traceId || span.traceId === traceId) && (!taskKey || span.taskKey === taskKey) && Number(span.completedAt ?? span.startedAt ?? 0) >= after).map((span) => structuredClone(span));
   }
   snapshot() { return { version: 1, maxSpans: this.maxSpans, spans: structuredClone(this.spans) }; }
   restore(snapshot) {

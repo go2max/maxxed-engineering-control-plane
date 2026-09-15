@@ -11,6 +11,7 @@
     "test": "node --test",
     "validate:completion": "node scripts/validate-completion.mjs",
     "validate:training": "node scripts/validate-training-data.mjs",
+    "promote:model": "node scripts/promote-model.mjs",
     "validate": "npm test && npm run validate:completion && npm run validate:training"
   },
   "dependencies": {
