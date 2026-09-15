@@ -19,6 +19,7 @@ import { fabricTaskFromDispatch } from '../agents/coding-task.js';
 import { evidenceFromFabricResult } from './fabric-execution-client.js';
 import { MergeRiskClassifier } from '../economics/merge-risk-classifier.js';
 import { EconomicVerifier } from '../economics/economic-verifier.js';
+import { EconomicCertificateIssuer } from '../economics/economic-certificate-issuer.js';
 import { OutcomeRecorder } from '../training/outcome-recorder.js';
 
 const isCodingTask = (task) => task?.metadata?.execution?.kind === 'coding-agent';
@@ -35,6 +36,12 @@ export class ControlPlaneRuntime {
     economicPolicyVersion = 'control-plane-economics-v1', economicEscalationThresholdUsd = 25,
     riskClassifier = economicPolicyVersion ? new MergeRiskClassifier() : null,
     economicVerifier = economicPolicyVersion ? new EconomicVerifier({ policyVersion: economicPolicyVersion, escalationThresholdUsd: economicEscalationThresholdUsd }) : null,
+    // Issue #68/#82 gap closer: on by default whenever the economic gate itself is on, so a real
+    // C3+ merge automatically collects its economic evidence and gets a source-bound certificate
+    // issued rather than being blocked with no path to pass. Pass `certificateIssuer: null`
+    // (independent of economicPolicyVersion) to disable auto-issuance for tests that want to
+    // inject certificates manually.
+    certificateIssuer = economicPolicyVersion ? new EconomicCertificateIssuer({ policyVersion: economicPolicyVersion }) : null,
     // Issue #71: accepted/rejected-outcome learning store. On by default, writing real accepted and
     // rejected trajectories to disk. Pass `outcomeLogPath: null` (or outcomeRecorder: null) to
     // disable, e.g. in tests that don't want filesystem writes.
@@ -50,8 +57,8 @@ export class ControlPlaneRuntime {
     this.modelPool = new LocalModelExecutionPool({ registry: this.modelRegistry, router: this.modelRouter, governor: this.modelGovernor, clientFactory: this.modelClientFactory });
     this.modelDiscovery = new ModelFabricDiscovery({ registry: this.modelRegistry, governor: this.modelGovernor });
     this.scheduler = new PortfolioScheduler({ graph: this.graph, policy: this.policy, ...schedulerOptions });
-    this.riskClassifier = riskClassifier; this.economicVerifier = economicVerifier; this.outcomeRecorder = outcomeRecorder;
-    this.orchestrator = new EngineeringOrchestrator({ graph: this.graph, scheduler: this.scheduler, claims: this.claims, verifier: this.verifier, repairs: this.repairs, modelRouter: this.modelRouter, verificationLedger: this.verificationLedger, riskClassifier: this.riskClassifier, economicVerifier: this.economicVerifier, outcomeRecorder: this.outcomeRecorder });
+    this.riskClassifier = riskClassifier; this.economicVerifier = economicVerifier; this.outcomeRecorder = outcomeRecorder; this.certificateIssuer = certificateIssuer;
+    this.orchestrator = new EngineeringOrchestrator({ graph: this.graph, scheduler: this.scheduler, claims: this.claims, verifier: this.verifier, repairs: this.repairs, modelRouter: this.modelRouter, verificationLedger: this.verificationLedger, riskClassifier: this.riskClassifier, economicVerifier: this.economicVerifier, outcomeRecorder: this.outcomeRecorder, certificateIssuer: this.certificateIssuer });
     this.workerProvider = workerProvider; this.fabricExecutionClient = fabricExecutionClient; this.throughput = new ThroughputGovernor(throughputOptions);
     this.fabricParentClaimTtlMs = Math.max(5_000, Number(fabricParentClaimTtlMs ?? 30_000));
     this.paused = false; this.restoredAt = null; this.lastModelDiscovery = null; this.lastThroughputDecision = null; this.lastFabricLeaseReconciliation = null;

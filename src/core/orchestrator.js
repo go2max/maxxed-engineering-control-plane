@@ -3,13 +3,13 @@ import { RepairAction } from '../verification/repair-controller.js';
 import { buildEvidenceBundle, buildReconciliationRequirement, synthesizeRepairTask } from '../verification/evidence-bundle.js';
 import { EngineeringTraceLedger, TraceDisposition } from '../telemetry/engineering-trace.js';
 import { workPacketClaimScope, workPacketView } from '../scheduler/work-packet-adapter.js';
-import { evaluateMergeEconomics } from '../economics/merge-economic-gate.js';
+import { evaluateMergeEconomics, isMergeCandidate } from '../economics/merge-economic-gate.js';
 import { trajectoryFromCompletion } from '../training/outcome-recorder.js';
 
 export class EngineeringOrchestrator {
   constructor({
     graph, scheduler, claims, verifier, repairs, modelRouter, verificationLedger = null, telemetry = new EngineeringTraceLedger(),
-    riskClassifier = null, economicVerifier = null, outcomeRecorder = null
+    riskClassifier = null, economicVerifier = null, outcomeRecorder = null, certificateIssuer = null
   } = {}) {
     if (!graph || !scheduler || !claims || !verifier || !repairs) throw new Error('graph, scheduler, claims, verifier and repairs are required');
     this.graph = graph;
@@ -25,6 +25,14 @@ export class EngineeringOrchestrator {
     // fail-closed in `complete()` below -- see evaluateMergeEconomics / merge-economic-gate.js.
     this.riskClassifier = riskClassifier;
     this.economicVerifier = economicVerifier;
+    // Issue #68/#82 gap closer: collects economic evidence and issues the source-bound
+    // EconomicImpactCertificate the gate above requires for C3+ merges. Estimation/issuance
+    // authority only -- it never decides acceptance, that stays with economicVerifier. When a
+    // certificate is issued it is attached to a *copy* of the task's metadata (never mutating the
+    // graph) strictly before evaluateMergeEconomics runs below. Optional: a null certificateIssuer
+    // simply means no certificate is auto-issued and the existing #82 fail-closed behavior
+    // (missing certificate -> REJECT for C3+) applies unchanged.
+    this.certificateIssuer = certificateIssuer;
     // Issue #71: accepted/rejected-outcome learning store. Purely observational -- see
     // OutcomeRecorder's contract that a recording failure never affects the accept/reject path.
     this.outcomeRecorder = outcomeRecorder;
@@ -77,7 +85,24 @@ export class EngineeringOrchestrator {
       // EconomicImpactCertificate (or any other non-ACCEPT verdict from the independent
       // EconomicVerifier) is rejected here, live and blocking -- it is never allowed to reach
       // TaskState.ACCEPTED on functional verification alone.
-      economicGate = evaluateMergeEconomics({ task, claim, evidence, riskClassifier: this.riskClassifier, economicVerifier: this.economicVerifier });
+      // Issue #68/#82 gap closer: if this is a real merge candidate with no certificate already
+      // attached, collect evidence and issue one now, upstream of the gate call below. Attaching
+      // is done on a metadata copy only (never mutating the stored task) -- see certificateIssuer
+      // field comment above. A null/failed issuance leaves gateTask === task, so the existing
+      // fail-closed "missing certificate -> REJECT for C3+" behavior is unchanged.
+      let gateTask = task;
+      if (this.certificateIssuer && this.riskClassifier && this.economicVerifier
+        && isMergeCandidate({ task, evidence }) && !task?.metadata?.economics?.certificate) {
+        const issued = this.certificateIssuer.issue({ task, evidence, claim, now });
+        if (issued?.certificate) {
+          gateTask = { ...task, metadata: { ...task.metadata, economics: { ...(task.metadata?.economics ?? {}), certificate: issued.certificate } } };
+          // Persist the attachment onto the real task metadata too (not just the local gate copy)
+          // so the certificate is visible on the task returned to callers and in the audit trail --
+          // still strictly before evaluateMergeEconomics runs below.
+          this.graph.upsert(gateTask);
+        }
+      }
+      economicGate = evaluateMergeEconomics({ task: gateTask, claim, evidence, riskClassifier: this.riskClassifier, economicVerifier: this.economicVerifier });
       if (economicGate && economicGate.verdict.verdict !== 'ACCEPT') {
         this.graph.setState(taskKey, TaskState.BLOCKED, {
           reason: 'economic-verification-failed', verification, evidenceBundle: bundle, economicGate
