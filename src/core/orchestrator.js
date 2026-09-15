@@ -4,6 +4,7 @@ import { buildEvidenceBundle, buildReconciliationRequirement, synthesizeRepairTa
 import { EngineeringTraceLedger, TraceDisposition } from '../telemetry/engineering-trace.js';
 import { workPacketClaimScope, workPacketView } from '../scheduler/work-packet-adapter.js';
 import { evaluateMergeEconomics, isMergeCandidate } from '../economics/merge-economic-gate.js';
+import { EconomicImpactCertificate } from '../economics/economic-impact-certificate.js';
 import { trajectoryFromCompletion } from '../training/outcome-recorder.js';
 
 export class EngineeringOrchestrator {
@@ -90,12 +91,22 @@ export class EngineeringOrchestrator {
       // is done on a metadata copy only (never mutating the stored task) -- see certificateIssuer
       // field comment above. A null/failed issuance leaves gateTask === task, so the existing
       // fail-closed "missing certificate -> REJECT for C3+" behavior is unchanged.
+      // Security review finding 1: a certificate present in task.metadata.economics.certificate is
+      // agent-supplied data, and task metadata is writable by every agent. It is therefore NEVER
+      // trusted merely because it is present -- the old "skip issuance when a certificate is already
+      // attached" shortcut let any agent hand-write a passing certificate for a C5 diff. Now every
+      // completion checks the presented certificate's signature against the control-plane signing
+      // key; anything that does not verify is discarded and the real issuer runs (or, with no
+      // issuer configured, the gate simply sees no certificate and fails closed for C3+).
       let gateTask = task;
-      if (this.certificateIssuer && this.riskClassifier && this.economicVerifier
-        && isMergeCandidate({ task, evidence }) && !task?.metadata?.economics?.certificate) {
-        const issued = this.certificateIssuer.issue({ task, evidence, claim, now });
-        if (issued?.certificate) {
-          gateTask = { ...task, metadata: { ...task.metadata, economics: { ...(task.metadata?.economics ?? {}), certificate: issued.certificate } } };
+      if (this.riskClassifier && this.economicVerifier && isMergeCandidate({ task, evidence })) {
+        const presented = task?.metadata?.economics?.certificate ?? null;
+        if (!presented || !EconomicImpactCertificate.verifySignature(presented)) {
+          const issued = this.certificateIssuer ? this.certificateIssuer.issue({ task, evidence, claim, now }) : null;
+          const economics = { ...(task?.metadata?.economics ?? {}) };
+          if (issued?.certificate) economics.certificate = issued.certificate;
+          else delete economics.certificate;
+          gateTask = { ...task, metadata: { ...task.metadata, economics } };
           // Persist the attachment onto the real task metadata too (not just the local gate copy)
           // so the certificate is visible on the task returned to callers and in the audit trail --
           // still strictly before evaluateMergeEconomics runs below.

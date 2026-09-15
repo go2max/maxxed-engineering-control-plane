@@ -1,6 +1,25 @@
 import { digest } from '../leverage/solution-cas.js';
+import { signCertificatePayload, verifyCertificatePayload } from '../security/certificate-signing-key.js';
 
 const SHA40 = /^[0-9a-f]{40}$/i;
+
+// Exactly the fields that make up a certificate's signed core. Anything a caller adds outside this
+// list is not covered by the signature and therefore carries no authority.
+const CORE_FIELDS = Object.freeze([
+  'version', 'sourceSha', 'candidateSha', 'policyVersion', 'riskClass', 'measurements',
+  'estimatedMonthlyDeltaUsd', 'provenance', 'confidence', 'recurringAmplification', 'issuedAt'
+]);
+
+function coreOf(certificate) {
+  const core = {};
+  for (const field of CORE_FIELDS) core[field] = certificate?.[field];
+  return core;
+}
+
+/** The exact payload the HMAC covers: the immutable core, its id, and any reconciled observation. */
+function signaturePayload(certificate) {
+  return { ...coreOf(certificate), certificateId: certificate?.certificateId, observed: certificate?.observed ?? null };
+}
 
 const COST_CATEGORIES = Object.freeze([
   'computeMs', 'dbReads', 'dbWrites', 'dbScans', 'storageGrowthBytes', 'egressBytes',
@@ -54,7 +73,10 @@ export class EconomicImpactCertificate {
       issuedAt: Number(now)
     };
     const certificateId = digest(core);
-    return Object.freeze({ ...core, certificateId, observed: null });
+    // The id is an unkeyed content address (useful for dedupe/audit), NOT proof of origin. The
+    // signature below is what makes this certificate unforgeable outside the control-plane process.
+    const signature = signCertificatePayload({ ...core, certificateId, observed: null });
+    return Object.freeze({ ...core, certificateId, observed: null, signature });
   }
 
   /**
@@ -63,6 +85,11 @@ export class EconomicImpactCertificate {
    */
   static reconcile(certificate, { observedMonthlyDeltaUsd, observedAt = Date.now(), observedMeasurements = {} } = {}) {
     if (!certificate?.certificateId) throw new Error('a valid certificate is required for reconciliation');
+    // Reconciliation must start from a genuinely issued certificate: an unsigned or forged one can
+    // never be laundered into a signed certificate by passing through this path.
+    if (!EconomicImpactCertificate.verifySignature(certificate)) {
+      throw new Error('refusing to reconcile a certificate that fails signature verification');
+    }
     const observed = Object.freeze({
       basedOnCertificateId: certificate.certificateId,
       observedMonthlyDeltaUsd: Number(observedMonthlyDeltaUsd),
@@ -73,7 +100,22 @@ export class EconomicImpactCertificate {
         ? (Number(observedMonthlyDeltaUsd) - certificate.estimatedMonthlyDeltaUsd) / Math.abs(certificate.estimatedMonthlyDeltaUsd)
         : (observedMonthlyDeltaUsd === 0 ? 0 : null)
     });
-    return Object.freeze({ ...certificate, observed });
+    const reconciled = { ...certificate, observed };
+    return Object.freeze({ ...reconciled, signature: signCertificatePayload(signaturePayload(reconciled)) });
+  }
+
+  /**
+   * Proof of origin: the certificate's id is the content address of its own core (so a mutated
+   * core is detected), and the HMAC over that core + id + observation verifies under the current
+   * process signing key (so a hand-constructed certificate, however well-formed, is rejected).
+   * Never throws and never reveals anything about the key.
+   */
+  static verifySignature(certificate) {
+    if (!certificate || typeof certificate !== 'object') return false;
+    if (typeof certificate.signature !== 'string') return false;
+    const core = coreOf(certificate);
+    if (digest(core) !== certificate.certificateId) return false;
+    return verifyCertificatePayload(signaturePayload(certificate), certificate.signature);
   }
 
   /**

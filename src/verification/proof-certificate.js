@@ -5,6 +5,7 @@
 // identity dimensions required for safe reuse. It never bypasses evidence-bundle digesting; it
 // adds exact-identity matching, a reuse cache, tamper detection and an evidence graph on top.
 import { createHash } from 'node:crypto';
+import { signCertificatePayload, verifyCertificatePayload } from '../security/certificate-signing-key.js';
 
 function canonical(value) {
   if (Array.isArray(value)) return value.map(canonical);
@@ -20,7 +21,8 @@ const SHA40 = /^[0-9a-f]{40}$/i;
  * match byte-for-byte; any mismatch forces revalidation (issue requirement).
  */
 export function certificateFingerprint({
-  sourceSha, mutationDigest, environmentFingerprint, policyVersion, executorId, verifierId, acceptanceContractDigest
+  sourceSha, mutationDigest, environmentFingerprint, policyVersion, executorId, verifierId, acceptanceContractDigest,
+  checks = null, accepted = null, composability = null, hasExternalEvidence = null, evidenceBundleDigest = null
 } = {}) {
   if (!SHA40.test(String(sourceSha ?? ''))) throw new Error('certificateFingerprint requires a 40-char sourceSha');
   if (!mutationDigest) throw new Error('mutationDigest is required');
@@ -38,7 +40,23 @@ export function certificateFingerprint({
     verifierId,
     acceptanceContractDigest
   };
-  return { ...dims, fingerprint: digestOf(dims) };
+  // `fingerprint` stays the pure *identity* address: it is the reuse key callers look a candidate
+  // shard up by, before any certificate for it exists, so it can only cover identity dimensions.
+  //
+  // Security review finding 2: identity alone does not pin down what a certificate *says*, so two
+  // certificates with the same identity but different `checks`/`accepted` used to be
+  // indistinguishable and the second silently overwrote the first in CertificateCache.
+  // `contentFingerprint` additionally covers every field that changes the certificate's meaning, so
+  // a relabelled certificate (selfReported flipped, accepted forced true, checks rewritten) has a
+  // different content fingerprint, and CertificateCache.put refuses to replace a stored
+  // certificate whose content fingerprint differs (see below) instead of silently overwriting it.
+  const content = { ...dims, checks: checks ?? null, accepted: accepted ?? null, composability: composability ?? null, hasExternalEvidence: hasExternalEvidence ?? null, evidenceBundleDigest: evidenceBundleDigest ?? null };
+  return { ...dims, fingerprint: digestOf(dims), contentFingerprint: digestOf(content) };
+}
+
+/** The content fingerprint of an already-built certificate (identity + everything it asserts). */
+export function certificateContentFingerprint(certificate) {
+  return certificateFingerprint({ ...certificate }).contentFingerprint;
 }
 
 // Checks whose result is intrinsic to the shard's own diff (composable: safe to reuse verbatim
@@ -90,11 +108,15 @@ export function issueProofCertificate({
   const allPassed = allChecks.every((check) => check.passed);
   const accepted = allPassed && hasExternalEvidence;
 
-  const identity = certificateFingerprint({ sourceSha, mutationDigest, environmentFingerprint, policyVersion, executorId, verifierId, acceptanceContractDigest });
+  const identity = certificateFingerprint({
+    sourceSha, mutationDigest, environmentFingerprint, policyVersion, executorId, verifierId, acceptanceContractDigest,
+    checks: normalizedChecks, accepted, composability, hasExternalEvidence, evidenceBundleDigest: evidenceBundle.digest
+  });
 
   const certificate = {
     schema: 'maxxed.proof.certificate.v1',
     fingerprint: identity.fingerprint,
+    contentFingerprint: identity.contentFingerprint,
     sourceSha: identity.sourceSha,
     mutationDigest,
     environmentFingerprint,
@@ -111,17 +133,31 @@ export function issueProofCertificate({
     evidenceBundleDigest: evidenceBundle.digest,
     issuedAt: now
   };
-  // Tamper-evident seal: any post-issuance mutation of the certificate body invalidates this hash.
-  const seal = digestOf({ ...certificate });
+  // Signed seal (security review finding 3): an HMAC-SHA256 over the whole certificate body under
+  // the control plane's signing key. The previous unkeyed digest was only a corruption checksum —
+  // an attacker could flip `selfReported`/`verifiedBy`/`accepted` and simply recompute it. An HMAC
+  // cannot be recomputed without the key, which never leaves the process.
+  const seal = signCertificatePayload({ ...certificate });
   return { ...certificate, seal };
 }
 
-/** Recomputes the seal over the current body and compares; false means tampered or corrupted. */
+/**
+ * Verifies the certificate's signed seal over its current body (timing-safe). False means the body
+ * was mutated after issuance, the certificate was never issued by this control plane, or it was
+ * issued under a different (e.g. previous-process) signing key. Also re-derives the content
+ * fingerprint, so a certificate whose stored fingerprints disagree with its own content is refused.
+ */
 export function verifyCertificateIntegrity(certificate) {
   if (!certificate || typeof certificate !== 'object') return false;
   const { seal, ...body } = certificate;
   if (!seal) return false;
-  return digestOf(body) === seal;
+  if (!verifyCertificatePayload(body, seal)) return false;
+  try {
+    const recomputed = certificateFingerprint({ ...certificate });
+    return recomputed.fingerprint === certificate.fingerprint && recomputed.contentFingerprint === certificate.contentFingerprint;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -129,10 +165,20 @@ export function verifyCertificateIntegrity(certificate) {
  * still verifies (fail-closed on tamper) and it has not been explicitly invalidated.
  */
 export class CertificateCache {
-  constructor() { this.byFingerprint = new Map(); this.invalidated = new Set(); }
+  constructor() { this.byFingerprint = new Map(); this.invalidated = new Set(); this.conflicted = new Set(); }
 
   put(certificate) {
     if (!verifyCertificateIntegrity(certificate)) throw new Error('refusing to cache a certificate that fails integrity verification');
+    // Finding 2, defence in depth: two certificates sharing an identity fingerprint but asserting
+    // different things (different checks/accepted/composability/evidence bundle) are contradictory
+    // evidence for the same shard. Rather than let the later one silently overwrite the earlier,
+    // fail closed: invalidate the fingerprint so neither is reusable until real revalidation runs.
+    const existing = this.byFingerprint.get(certificate.fingerprint);
+    if (this.conflicted.has(certificate.fingerprint) || (existing && existing.contentFingerprint !== certificate.contentFingerprint)) {
+      this.conflicted.add(certificate.fingerprint);
+      this.invalidate(certificate.fingerprint, 'conflicting-certificate-content-for-identity');
+      throw new Error('refusing to overwrite a cached certificate with conflicting content for the same identity');
+    }
     this.byFingerprint.set(certificate.fingerprint, structuredClone(certificate));
     this.invalidated.delete(certificate.fingerprint);
     return certificate.fingerprint;
