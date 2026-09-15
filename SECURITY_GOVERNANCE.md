@@ -65,3 +65,17 @@ New claims or acceptance fail closed when authorization, source identity, depend
 ## Emergency stop
 
 Emergency pause/drain is independently available and audited. Patch Fabric, autonomous coding, model inference and release lanes should be independently contractible. Resumption requires reconciliation and current policy validation.
+
+## Certificate signing (economic + proof certificates)
+
+Economic Impact Certificates and Proof-Carrying Shard certificates are only evidence when the
+control plane itself issued them. Both are signed with HMAC-SHA256 over their canonical content
+using a single process-held key (`src/security/certificate-signing-key.js`), supplied via
+`MAXXED_CERTIFICATE_SIGNING_KEY` or generated randomly at first use when unset. The key is never
+exported, logged, serialized into a certificate or returned by any endpoint; verification is
+timing-safe.
+
+Consequences that are intentional: a certificate carried in agent-writable task metadata is trusted
+only after its signature verifies (presence alone grants nothing), a certificate mutated after
+issuance stops verifying, and restarting the process without a configured key rotates it, which
+invalidates previously issued certificates until they are re-issued from real evidence.

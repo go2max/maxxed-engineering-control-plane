@@ -46,6 +46,15 @@ export class EconomicVerifier {
       return { verdict: EconomicVerdict.REJECT, reason: 'economic-verifier-authority-must-be-independent', riskClass };
     }
 
+    // Proof of origin comes first, before any binding/threshold reasoning: a certificate is only
+    // evidence if this control plane's own issuer signed it. A hand-constructed object that merely
+    // *looks* like a certificate (correct SHAs, riskClass, provenance, an arbitrary certificateId)
+    // has no signature under the process key and is rejected outright — the presence of a
+    // certificate object is never itself a reason to trust it.
+    if (certificate && !EconomicImpactCertificate.verifySignature(certificate)) {
+      return { verdict: EconomicVerdict.REJECT, reason: 'certificate-signature-invalid', riskClass };
+    }
+
     const requiresCertificate = classifier.requiresEconomicCertificate(riskClass);
     if (!requiresCertificate) {
       // C0-C2: low-overhead path — docs-only / bounded changes don't require a full economic

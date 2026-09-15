@@ -142,3 +142,42 @@ test('a failing outcome recorder never blocks or alters the real accept decision
   const completed = orchestrator.complete({ taskKey: 't1', claim: dispatch.claim, acceptance: { requiredChecks: ['tests'] }, evidence: { checks: { tests: { ok: true } } }, now: 1001 });
   assert.equal(completed.task.state, TaskState.ACCEPTED);
 });
+
+test('PoC (security review finding 1): a hand-forged certificate in task metadata no longer bypasses the C5 gate', () => {
+  const { graph, orchestrator } = makeOrchestrator();
+  // Exactly the object the review's PoC attached: plausible shape, plausible fields, no signature.
+  const forged = {
+    version: 1, sourceSha: SHA_A, candidateSha: SHA_B, policyVersion: 'v1', riskClass: 'C0',
+    measurements: {}, estimatedMonthlyDeltaUsd: 0, provenance: 'measured', confidence: 1,
+    recurringAmplification: null, issuedAt: 0, certificateId: 'anything', observed: null
+  };
+  graph.add(mergeTask('t1', { certificate: forged }));
+  const [dispatch] = orchestrator.dispatch([worker], { now: 1000 });
+  const completed = orchestrator.complete({
+    taskKey: 't1', claim: dispatch.claim,
+    acceptance: { requiredChecks: ['tests'] },
+    evidence: { producerId: 'agent-1', verifierId: 'verifier-1', checks: { tests: { ok: true } }, artifacts: { commitSha: SHA_B, changedPaths: ['src/billing/charge-card.js'] } },
+    now: 1001
+  });
+  assert.equal(completed.task.state, TaskState.BLOCKED);
+  assert.equal(completed.decision.action, 'ECONOMIC_REJECT');
+  assert.equal(completed.economicGate.classification.class, 'C5');
+  assert.equal(completed.economicGate.verdict.reason, 'missing-required-economic-certificate');
+  // The forged certificate is stripped from the task rather than left standing as audit evidence.
+  assert.equal(completed.task.metadata.economics.certificate, undefined);
+});
+
+test('a genuinely issued certificate that is then tampered with in task metadata is rejected', () => {
+  const { graph, orchestrator } = makeOrchestrator();
+  const cert = EconomicImpactCertificate.issue({ sourceSha: SHA_A, candidateSha: SHA_B, policyVersion: 'v1', riskClass: 'C3', estimatedMonthlyDeltaUsd: 5, provenance: 'measured', confidence: 0.9 });
+  graph.add(mergeTask('t1', { touchesScheduledWork: true, certificate: { ...cert, estimatedMonthlyDeltaUsd: 0, riskClass: 'C0' } }));
+  const [dispatch] = orchestrator.dispatch([worker], { now: 1000 });
+  const completed = orchestrator.complete({
+    taskKey: 't1', claim: dispatch.claim,
+    acceptance: { requiredChecks: ['tests'] },
+    evidence: { producerId: 'agent-1', verifierId: 'verifier-1', checks: { tests: { ok: true } }, artifacts: { commitSha: SHA_B, changedPaths: ['src/jobs/nightly-sync.js'] } },
+    now: 1001
+  });
+  assert.equal(completed.task.state, TaskState.BLOCKED);
+  assert.equal(completed.economicGate.verdict.verdict, 'REJECT');
+});
