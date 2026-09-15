@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "status": "PROPOSED -- default thresholds pending explicit operator sign-off, not yet in effect for a real promotion decision",
+  "domainPrimaryMetric": "taskSuccessRate",
+  "minDomainImprovement": 0,
+  "safetyMetrics": ["regressionRate", "hallucinationRate"],
+  "maxSafetyRegression": 0.02,
+  "maxRegressionByMetric": {},
+  "notes": [
+    "This mirrors src/training/promotion-gate.js's DEFAULT_PROMOTION_POLICY. Keep the two in sync; scripts/promote-model.mjs loads this file when no --policy override is given.",
+    "maxSafetyRegression=0.02 (2 percentage points absolute) is a reasonable starting default, NOT an operator-approved threshold. It needs explicit operator sign-off before being used for a real promote/reject call. Get sign-off, then update this file's `status` field to reflect it (e.g. 'APPROVED 2026-09-XX by <operator>').",
+    "Non-gating metrics (toolUseCorrectness, latencyMsP50, costPerTaskUsd) are reported by aggregateDomainScores but are not yet part of the gate's pass/fail decision -- they inform the promotion decision narrative but don't block promotion by themselves. Add them to safetyMetrics (with per-metric thresholds) once the operator wants them gating."
+  ]
+}
