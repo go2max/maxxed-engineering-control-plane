@@ -47,7 +47,11 @@ test('coding repair task continues from failed attempt commit', () => {
   assert.match(repair.metadata.execution.branchBase, /repair-1$/);
   assert.equal(repair.metadata.execution.autoPush, true);
   assert.equal(repair.metadata.repairOf, 'issue-124');
-  assert.deepEqual(repair.metadata.modelRequest, task.metadata.modelRequest);
+  // Repair carries the parent's routing request forward, but stamps its attempt count as
+  // lowerTierAttempts so the router's cost-justification gate can react to repeated failures
+  // (issue #72 live wiring) -- at attempt 1 the cognition class itself is unchanged.
+  assert.equal(repair.metadata.modelRequest.cognitionClass, task.metadata.modelRequest.cognitionClass);
+  assert.equal(repair.metadata.modelRequest.lowerTierAttempts, 1);
 });
 
 test('throughput governor doubles healthy baseline but contracts on backpressure', () => {

@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { buildRepairPlan, fingerprintFailure } from './failure-fingerprint.js';
 import { TaskStage } from '../scheduler/task-stage.js';
+import { CognitionClass, inferCognitionClassForCodingTask } from '../models/cognition-classes.js';
 
 function canonical(value) {
   if (Array.isArray(value)) return value.map(canonical);
@@ -23,6 +24,21 @@ export function synthesizeRepairTask({ task, verification, evidence = {}, attemp
   const plan = buildRepairPlan(failure);
   const fingerprint = fingerprintFailure(failure);
   const key = `${task.key}:repair:${attempt}:${fingerprint.slice(0, 12)}`;
+  // Repeated repair failures are exactly the evidence the escalation ladder is meant to react
+  // to (issue #72): each retry carries its attempt count as lowerTierAttempts so the router's
+  // cost-justification gate can recognize exhausted lower tiers, and repeated failures nudge
+  // the cognition class itself up the ladder instead of retrying the same tier indefinitely.
+  const parentModelRequest = task.metadata?.modelRequest ?? null;
+  const repairCognitionClass = parentModelRequest ? inferCognitionClassForCodingTask({ riskClass: task.riskClass, repairAttempt: attempt }) : null;
+  const repairModelRequest = parentModelRequest ? {
+    ...structuredClone(parentModelRequest),
+    cognitionClass: repairCognitionClass,
+    lowerTierAttempts: attempt,
+    maxCostPerMillionTokens: repairCognitionClass === CognitionClass.FRONTIER_REASONING ? Infinity : (parentModelRequest.maxCostPerMillionTokens ?? 0),
+    ...(repairCognitionClass === CognitionClass.FRONTIER_REASONING
+      ? { costJustification: `repair attempt ${attempt} for ${task.key} exhausted lower-tier attempts` }
+      : {})
+  } : null;
   const originalExecution = task.metadata?.execution;
   const codingRepair = originalExecution?.kind === 'coding-agent' ? {
     ...structuredClone(originalExecution),
@@ -52,7 +68,7 @@ export function synthesizeRepairTask({ task, verification, evidence = {}, attemp
       restartable: true,
       closesParentOnAccept: Boolean(codingRepair),
       acceptance: task.metadata?.acceptance ?? {},
-      ...(task.metadata?.modelRequest ? { modelRequest: structuredClone(task.metadata.modelRequest) } : {}),
+      ...(repairModelRequest ? { modelRequest: repairModelRequest } : {}),
       ...(codingRepair ? { execution: codingRepair, mutationScopes: task.metadata?.mutationScopes ?? [] } : {})
     }
   };

@@ -1,4 +1,5 @@
 import { TaskStage } from '../scheduler/task-stage.js';
+import { CognitionClass, inferCognitionClassForCodingTask } from '../models/cognition-classes.js';
 
 function slug(value) {
   return String(value ?? 'task').toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80) || 'task';
@@ -22,11 +23,23 @@ export function compileCodingTask({
     requireIndependentVerifier: riskClass === 'high' || riskClass === 'critical' || acceptance.requireIndependentVerifier === true,
     ...acceptance
   };
+  // Wires issue #72's cognition-class routing into the live dispatch path: every real coding
+  // task is packaged with an inferred cognitionClass so ModelRouter.route() actually applies
+  // tiered escalation and cost-justification gating (see EngineeringOrchestrator#dispatch),
+  // instead of leaving model selection to a flat default with no tiering.
+  const cognitionClass = inferCognitionClassForCodingTask({ riskClass });
   const normalizedModelRequest = modelRequest ?? {
     capabilities: ['coding'],
     minContextWindow: 8192,
-    maxCostPerMillionTokens: 0,
-    taskClass: 'coding'
+    // Cheapest-correct fallback stays local-first/free by default; frontier-tier requests
+    // relax the cost ceiling since eligibility there is already gated by cost justification
+    // (ModelRouter) and by ControlPlaneRuntime never allowing external escalation.
+    maxCostPerMillionTokens: cognitionClass === CognitionClass.FRONTIER_REASONING ? Infinity : 0,
+    taskClass: 'coding',
+    cognitionClass,
+    ...(cognitionClass === CognitionClass.FRONTIER_REASONING
+      ? { costJustification: `risk-class:${riskClass} coding task declared architecturally significant` }
+      : {})
   };
   return {
     key,
