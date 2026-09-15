@@ -31,6 +31,7 @@ import { ToolResultCache } from '../leverage/tool-result-cache.js';
 import { ExecutionCheckpointStore } from '../leverage/execution-checkpoint.js';
 import { ImpactTestSelector } from '../verification/impact-test-selector.js';
 import { TestReliabilityLedger } from '../verification/test-reliability.js';
+import { ChallengeSuiteScheduler } from '../verification/challenge-suite-scheduler.js';
 import { WorkerPerformanceLedger } from '../scheduler/worker-performance.js';
 import { MicroShardPlanner } from '../patch/shard-planner.js';
 import { PatchFabric } from '../patch/patch-fabric.js';
@@ -84,6 +85,10 @@ const contextCompiler = new ContextCompiler({ graph: semanticGraph, cas: solutio
 const speculativePlanner = new SpeculativePlanner({ maxCandidates: Number(process.env.MAXXED_SPECULATIVE_MAX_CANDIDATES ?? 4), minValueToCostRatio: Number(process.env.MAXXED_SPECULATIVE_MIN_VALUE_COST ?? 3) });
 const impactTestSelector = new ImpactTestSelector({ graph: semanticGraph });
 const testReliability = new TestReliabilityLedger();
+const challengeSuiteScheduler = new ChallengeSuiteScheduler({
+  everyNTargeted: Number(process.env.MAXXED_CHALLENGE_EVERY_N ?? 8),
+  minIntervalMs: Number(process.env.MAXXED_CHALLENGE_MIN_INTERVAL_MS ?? 30 * 60 * 1000)
+});
 const shardPlanner = new MicroShardPlanner();
 const patchFabric = new PatchFabric();
 const microShards = new MicroShardCoordinator({ runtime, patchFabric, shardPlanner });
@@ -95,7 +100,7 @@ const executionCheckpoints = new ExecutionCheckpointStore({ maxEntries: Number(p
 const leverageComponents = {
   leverage, solutionCas, artifactCache, artifactStore, semanticGraph, transforms, trajectoryHarvester, repairMemory,
   productFamilies, bottleneckOptimizer, maintenancePlanner, replayProjector, sourceIndexer, codeIndexes, contextCompiler,
-  speculativePlanner, impactTestSelector, testReliability, workerPerformance, shardPlanner, patchFabric, microShards, derivedState, leverageEngine,
+  speculativePlanner, impactTestSelector, testReliability, challengeSuiteScheduler, workerPerformance, shardPlanner, patchFabric, microShards, derivedState, leverageEngine,
   toolResultCache, executionCheckpoints
 };
 
@@ -105,7 +110,7 @@ const patchStore = new RuntimeStateStore(patchStatePath);
 const restored = await store.load();
 if (restored) runtime.restore(restored);
 const restoredLeverage = await leverageStore.load();
-if ([1,2,3,4,5].includes(restoredLeverage?.version)) {
+if ([1,2,3,4,5,6].includes(restoredLeverage?.version)) {
   solutionCas.restore(restoredLeverage.solutionCas);
   artifactCache.restore(restoredLeverage.artifactCache);
   semanticGraph.restore(restoredLeverage.semanticGraph);
@@ -117,6 +122,8 @@ if ([1,2,3,4,5].includes(restoredLeverage?.version)) {
   if (restoredLeverage.testReliability) testReliability.restore(restoredLeverage.testReliability);
   if (restoredLeverage.toolResultCache) toolResultCache.restore(restoredLeverage.toolResultCache);
   if (restoredLeverage.executionCheckpoints) executionCheckpoints.restore(restoredLeverage.executionCheckpoints);
+  if (restoredLeverage.shardPlanner) shardPlanner.restore(restoredLeverage.shardPlanner);
+  if (restoredLeverage.challengeSuiteScheduler) challengeSuiteScheduler.restore(restoredLeverage.challengeSuiteScheduler);
 }
 for (const [family, baseline] of Object.entries(CANONICAL_PRODUCT_FAMILIES)) if (!productFamilies.baselines.has(family)) productFamilies.registerBaseline({ family, ...baseline });
 const restoredPatch = await patchStore.load();
@@ -134,7 +141,7 @@ const persist = async () => {
     await store.save(runtime.snapshot());
     await patchStore.save(patchFabric.snapshot());
     await leverageStore.save({
-      version: 5,
+      version: 6,
       solutionCas: solutionCas.snapshot(),
       artifactCache: artifactCache.snapshot(),
       semanticGraph: semanticGraph.snapshot(),
@@ -145,7 +152,9 @@ const persist = async () => {
       workerPerformance: workerPerformance.snapshot(),
       testReliability: testReliability.snapshot(),
       toolResultCache: toolResultCache.snapshot(),
-      executionCheckpoints: executionCheckpoints.snapshot()
+      executionCheckpoints: executionCheckpoints.snapshot(),
+      shardPlanner: shardPlanner.snapshot(),
+      challengeSuiteScheduler: challengeSuiteScheduler.snapshot()
     });
   } catch (error) { console.error(JSON.stringify({ event: 'control-plane-persistence-failed', error: error.message })); }
   finally { saving = false; }

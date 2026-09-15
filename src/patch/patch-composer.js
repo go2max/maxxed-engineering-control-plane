@@ -1,6 +1,8 @@
 import { contentHash, validatePatchBundle } from './patch-bundle.js';
 import { buildPatchConflictGraph } from './conflict-graph.js';
 import { digest } from '../leverage/solution-cas.js';
+import { SemanticConflictDetector } from './semantic-conflict-detector.js';
+import { HotSymbolLock } from './hot-symbol-lock.js';
 
 function normalizeFiles(files = {}) {
   if (files instanceof Map) return new Map([...files.entries()].map(([key, value]) => [String(key), String(value)]));
@@ -29,6 +31,11 @@ function deriveBaseFiles(baseFiles, bundles) {
 }
 
 export class PatchComposer {
+  constructor({ semanticConflictDetector = new SemanticConflictDetector(), hotSymbolLock = new HotSymbolLock() } = {}) {
+    this.semanticConflictDetector = semanticConflictDetector;
+    this.hotSymbolLock = hotSymbolLock;
+  }
+
   compose({ baseSha, baseFiles = {}, bundles = [], parentTaskKey = null, now = Date.now() } = {}) {
     if (!/^[0-9a-f]{40}$/i.test(String(baseSha ?? ''))) throw new Error('composer requires exact 40-character baseSha');
     const valid = bundles.map(validatePatchBundle);
@@ -41,13 +48,41 @@ export class PatchComposer {
       throw error;
     }
 
+    // Boundary-based (file/symbol) overlap is clean, but two shards can still interact through a
+    // shared capability, contract, invariant or caller/callee edge across a changed signature.
+    // Any worker evidence carrying a `semantics` payload gets checked here, before we ever apply
+    // a single write.
+    const semanticShards = valid.map((bundle) => ({ key: bundle.shardKey, scope: bundle.scope, semantics: bundle.evidence?.semantics ?? {} }));
+    const semanticReport = this.semanticConflictDetector.analyze(semanticShards);
+    if (semanticReport.blocksComposition) {
+      const summary = [
+        ...semanticReport.pairwise.map((row) => `${row.left}<->${row.right}:${row.reasons.join('+')}`),
+        ...semanticReport.multiShard.map((row) => `${row.dimension}[${row.participants.join(',')}]`)
+      ].join(', ');
+      const error = new Error(`semantic patch conflicts detected: ${summary}`);
+      error.semanticConflicts = semanticReport;
+      throw error;
+    }
+
     const byKey = new Map(valid.map((bundle) => [bundle.shardKey ?? bundle.taskKey, bundle]));
     const original = deriveBaseFiles(baseFiles, valid);
     const working = new Map(original);
     const applied = [];
+    const hotSymbolAcquisitions = [];
 
+    try {
     for (const key of graph.order) {
       const bundle = byKey.get(key);
+      // Serialize access to hot files/symbols: a shard that touches an identifier currently
+      // held by another in-flight composition is rejected rather than silently interleaved.
+      // Cold identifiers (the overwhelming majority) never pay this cost.
+      const lock = this.hotSymbolLock.acquire(key, bundle);
+      hotSymbolAcquisitions.push({ shardKey: key, ...lock });
+      if (!lock.acquired) {
+        const error = new Error(`hot symbol contention during composition: ${key} blocked by shard(s) holding ${lock.blockedBy.join(', ')}`);
+        error.hotSymbolContention = lock;
+        throw error;
+      }
       for (const write of bundle.writes) {
         const exists = working.has(write.path);
         const current = exists ? working.get(write.path) : null;
@@ -67,6 +102,9 @@ export class PatchComposer {
         }
       }
       applied.push({ shardKey: key, bundleDigest: bundle.bundleDigest, workerId: bundle.workerId, generation: bundle.generation, checks: structuredClone(bundle.checks) });
+    }
+    } finally {
+      for (const key of graph.order) this.hotSymbolLock.release(key);
     }
 
     const changedPaths = [...new Set([...original.keys(), ...working.keys()])].filter((file) => original.get(file) !== working.get(file)).sort();
@@ -93,6 +131,8 @@ export class PatchComposer {
       files: serializableFiles(working),
       applied,
       conflictGraph: graph,
+      semanticConflictReport: semanticReport,
+      hotSymbolAcquisitions,
       requiresParentVerification: true,
       accepted: false
     };
