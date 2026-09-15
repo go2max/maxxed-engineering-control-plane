@@ -27,6 +27,8 @@ import { CodeIndexAdapterRegistry, ScipIndexAdapter } from '../leverage/code-ind
 import { ContextCompiler } from '../leverage/context-compiler.js';
 import { SpeculativePlanner } from '../leverage/speculative-planner.js';
 import { DerivedStateManager } from '../leverage/derived-state.js';
+import { ToolResultCache } from '../leverage/tool-result-cache.js';
+import { ExecutionCheckpointStore } from '../leverage/execution-checkpoint.js';
 import { ImpactTestSelector } from '../verification/impact-test-selector.js';
 import { TestReliabilityLedger } from '../verification/test-reliability.js';
 import { WorkerPerformanceLedger } from '../scheduler/worker-performance.js';
@@ -88,10 +90,13 @@ const microShards = new MicroShardCoordinator({ runtime, patchFabric, shardPlann
 const leverageEngine = new LeverageEngine({ cas: solutionCas, graph: semanticGraph, transforms, repairs: repairMemory });
 const leverage = new LeverageRuntimeAdapter({ runtime, engine: leverageEngine, cas: solutionCas, harvester: trajectoryHarvester, repairs: repairMemory });
 const derivedState = new DerivedStateManager({ solutionCas, artifactCache, semanticGraph, trajectoryHarvester, repairMemory });
+const toolResultCache = new ToolResultCache({ maxEntries: Number(process.env.MAXXED_TOOL_CACHE_MAX ?? 20000), defaultTtlMs: Number(process.env.MAXXED_TOOL_CACHE_TTL_MS ?? 60000) });
+const executionCheckpoints = new ExecutionCheckpointStore({ maxEntries: Number(process.env.MAXXED_CHECKPOINT_MAX ?? 5000) });
 const leverageComponents = {
   leverage, solutionCas, artifactCache, artifactStore, semanticGraph, transforms, trajectoryHarvester, repairMemory,
   productFamilies, bottleneckOptimizer, maintenancePlanner, replayProjector, sourceIndexer, codeIndexes, contextCompiler,
-  speculativePlanner, impactTestSelector, testReliability, workerPerformance, shardPlanner, patchFabric, microShards, derivedState, leverageEngine
+  speculativePlanner, impactTestSelector, testReliability, workerPerformance, shardPlanner, patchFabric, microShards, derivedState, leverageEngine,
+  toolResultCache, executionCheckpoints
 };
 
 const store = new RuntimeStateStore(statePath);
@@ -100,7 +105,7 @@ const patchStore = new RuntimeStateStore(patchStatePath);
 const restored = await store.load();
 if (restored) runtime.restore(restored);
 const restoredLeverage = await leverageStore.load();
-if ([1,2,3,4].includes(restoredLeverage?.version)) {
+if ([1,2,3,4,5].includes(restoredLeverage?.version)) {
   solutionCas.restore(restoredLeverage.solutionCas);
   artifactCache.restore(restoredLeverage.artifactCache);
   semanticGraph.restore(restoredLeverage.semanticGraph);
@@ -110,6 +115,8 @@ if ([1,2,3,4].includes(restoredLeverage?.version)) {
   transforms.restore(restoredLeverage.transforms);
   if (restoredLeverage.workerPerformance) workerPerformance.restore(restoredLeverage.workerPerformance);
   if (restoredLeverage.testReliability) testReliability.restore(restoredLeverage.testReliability);
+  if (restoredLeverage.toolResultCache) toolResultCache.restore(restoredLeverage.toolResultCache);
+  if (restoredLeverage.executionCheckpoints) executionCheckpoints.restore(restoredLeverage.executionCheckpoints);
 }
 for (const [family, baseline] of Object.entries(CANONICAL_PRODUCT_FAMILIES)) if (!productFamilies.baselines.has(family)) productFamilies.registerBaseline({ family, ...baseline });
 const restoredPatch = await patchStore.load();
@@ -127,7 +134,7 @@ const persist = async () => {
     await store.save(runtime.snapshot());
     await patchStore.save(patchFabric.snapshot());
     await leverageStore.save({
-      version: 4,
+      version: 5,
       solutionCas: solutionCas.snapshot(),
       artifactCache: artifactCache.snapshot(),
       semanticGraph: semanticGraph.snapshot(),
@@ -136,7 +143,9 @@ const persist = async () => {
       productFamilies: productFamilies.snapshot(),
       transforms: transforms.snapshot(),
       workerPerformance: workerPerformance.snapshot(),
-      testReliability: testReliability.snapshot()
+      testReliability: testReliability.snapshot(),
+      toolResultCache: toolResultCache.snapshot(),
+      executionCheckpoints: executionCheckpoints.snapshot()
     });
   } catch (error) { console.error(JSON.stringify({ event: 'control-plane-persistence-failed', error: error.message })); }
   finally { saving = false; }
