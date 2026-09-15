@@ -9,7 +9,7 @@ const REF = 'a'.repeat(40);
 function validationWorker() {
   return {
     workerId: 'validator-1', state: 'AVAILABLE',
-    capabilities: ['git', 'node', 'npm'],
+    capabilities: ['validation-agent', 'git', 'node', 'npm'],
     capacity: { freeSlots: 2, freeMemoryMb: 4096 },
     pressure: { cpuPct: 5, memoryPct: 10 },
     metadata: { os: 'linux', arch: 'x64', localModels: [] }
