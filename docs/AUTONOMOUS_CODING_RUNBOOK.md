@@ -16,6 +16,17 @@ Micro-lane path:
 
 Repository merge policy remains authoritative after PR creation.
 
+## Reuse-first gate
+
+Before any coding task that writes net-new infrastructure or framework-level code is dispatched,
+[`docs/REUSE_FIRST_CHECKLIST.md`](REUSE_FIRST_CHECKLIST.md) runs: existing Maxxed code first, then
+mature public GitHub projects, before writing custom code for anything but the remaining
+Maxxed-specific delta. This applies to the autonomous coding loop exactly as it applies to human
+engineering — the loop's PR must carry a `reuse:` line per
+[`.github/pull_request_template.md`](../.github/pull_request_template.md), and
+`npm run validate:reuse-gate` enforces it in CI. A duplicate internal implementation found during
+the scan is a refactor signal, not something to build around a second time.
+
 ## Preconditions
 
 - Node.js 22+ on the control-plane host and coding workers.
