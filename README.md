@@ -4,9 +4,11 @@ This repository is the canonical planning and architecture authority for Maxxed 
 
 ## End-state target
 
-Build a portfolio-scale, exception-driven software-production control plane designed for **300x sustained owner-attention leverage across mixed engineering work**, with a separate architectural target of **up to 100,000x effective/burst leverage on highly standardized product-family operations** through reuse, deterministic transformation, caching, micro-sharding and learned repair.
+Build a portfolio-scale, exception-driven software-production control plane from the current measured ~**86x average effective engineering throughput** toward progressively higher sustained mixed-work leverage, with a separate architectural target of **50,000x-100,000x effective/burst leverage on highly standardized product-family operations** through reuse, deterministic transformation, caching, micro-sharding, repair memory, product-family regeneration and learned routing.
 
 The 100k target is not a claim of 100k faster general-purpose coding. It means one novel solution can be reused or transformed across many products with little or no new reasoning while preserving exact-SHA acceptance evidence.
+
+The canonical second-pass acceleration audit, including a simulated 100-perspective review across each of 16 general technology sectors, deduplicated findings, phase-by-phase engineering-hour estimates and leverage ranges, is [`docs/AI_AGENT_100K_ACCELERATION_AUDIT.md`](docs/AI_AGENT_100K_ACCELERATION_AUDIT.md).
 
 ## Current operating shape
 
@@ -38,6 +40,7 @@ Autonomous coding, fenced local workers, verification/repair, local model routin
 12. Persist provenance, event history and accepted/rejected outcomes so the system improves from real work.
 13. Prefer product-family deltas and shared SDK/foundation reuse over rebuilding complete products.
 14. Do not weaken security, acceptance or source-of-truth boundaries to increase reported leverage.
+15. AI-agent work should consume typed work packets and compiled minimal context rather than rediscovering repository conventions from scratch.
 
 ## Repository map
 
@@ -45,6 +48,7 @@ Autonomous coding, fenced local workers, verification/repair, local model routin
 - `LANE_MODEL.md` — task lanes, micro-lanes, claims, leases and backpressure.
 - `THROUGHPUT_MODEL.md` — sustained vs effective leverage metrics and checkpoints.
 - `docs/100K_LEVERAGE_ARCHITECTURE.md` — compounding reuse/caching/learning architecture.
+- `docs/AI_AGENT_100K_ACCELERATION_AUDIT.md` — 1,600-perspective simulated cross-sector audit, deduplicated AI-agent optimizations, engineering-hour estimates and cumulative leverage model.
 - `docs/PATCH_FABRIC.md` — micro-shard execution and safe patch composition.
 - `docs/AUTONOMOUS_CODING_RUNBOOK.md` — current coding-loop operation.
 - `SECURITY_GOVERNANCE.md` — authority and safety boundaries.
