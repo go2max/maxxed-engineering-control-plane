@@ -2,6 +2,8 @@
 
 **Status:** canonical supporting audit for the Maxxed Engineering Control Plane
 
+> **Architecture evolution note (2026-09-15):** This audit remains the canonical record of the 1,600-perspective sector review and the original phase-by-phase 100K engineering-effort model. Its 100K target is now a **milestone**, not an architectural ceiling. The latest no-ceiling architecture, additional 100-perspective adversarial panel, broad GitHub prior-art sweep, and open-ended optimization loop are defined in [`OPEN_ENDED_LEVERAGE_ARCHITECTURE.md`](OPEN_ENDED_LEVERAGE_ARCHITECTURE.md). Where this document describes a terminal-looking target band, interpret it as the modeled milestone for this audit tranche rather than the final capability of the control plane.
+
 **Baseline date:** 2026-09-15
 
 **Current measured operating baseline:** ~**86x** average effective engineering throughput.
@@ -229,7 +231,7 @@ Engineering hours are focused implementation-equivalent effort. The phases shoul
 | 20 | Cross-portfolio deterministic fan-out: one accepted capability delta -> regenerate/verify/release every applicable product | 180–400 hrs | **2,600–5,000x** | **35,000–75,000x** |
 | 21 | Speculative planning/candidate execution only where expected-value model proves verifier-adjusted gain | 100–220 hrs | **2,800–5,500x** | **40,000–85,000x** |
 | 22 | Continuous complexity deletion: dead code/workflows/schemas/docs/packages/repos + duplicate-authority detection | 100–220 hrs | **3,000–6,000x** | **45,000–90,000x** |
-| 23 | Full leverage fabric integration: caches + transforms + micro-shards + repair memory + learning + family fan-out + adaptive capacity | 200–450 hrs | **3,000–7,500x target band** | **50,000–100,000x effective/burst target band** |
+| 23 | Full leverage fabric integration: caches + transforms + micro-shards + repair memory + learning + family fan-out + adaptive capacity | 200–450 hrs | **3,000–7,500x target band** | **50,000–100,000x effective/burst milestone band** |
 
 ### Raw implementation-equivalent effort
 
@@ -239,7 +241,7 @@ That number is deliberately not converted into calendar time. The platform being
 
 ---
 
-# How 86x can compound toward 100K effective leverage
+# How 86x can compound toward the 100K milestone
 
 The system does not need a literal 1,163x improvement in raw coding speed to move from 86x to 100,000x effective portfolio leverage. The additional factor can come from reducing how often novel work is performed.
 
@@ -253,13 +255,15 @@ A representative compatible workload can compound roughly independent mechanisms
 - **2x** context compression and prior-repair retrieval;
 - **1.5x** executor/model economics and warm-pool latency reduction.
 
-Illustrative product: **3,600x additional effective leverage** before overlap discounting. Applied mechanically to 86x this exceeds the architectural target, which is why the control plane caps the communicated standardized/burst target at **50K–100K** until real telemetry proves a higher stable band.
+Illustrative product: **3,600x additional effective leverage** before overlap discounting. Applied mechanically to 86x this exceeds the 100K milestone, which is why the milestone remains plausible for compatible work if telemetry validates the compounding mechanisms.
 
 The important distinction is:
 
 - **general novel engineering:** reasoning remains dominant, so sustained leverage is much lower;
 - **mixed portfolio work:** reuse, impact selection, smaller context, lower rework, and parallelism compound meaningfully;
 - **factory-compatible portfolio work:** one novel solution can become dozens or hundreds of accepted outputs with little additional reasoning.
+
+The control plane must continue optimizing after this milestone; see `OPEN_ENDED_LEVERAGE_ARCHITECTURE.md`.
 
 ---
 
