@@ -69,6 +69,18 @@ function pctIncrease(before, after) {
   return (after - before) / before;
 }
 
+// Each canary metric's "how much worse did the candidate get" measure, the policy threshold it's
+// checked against, and (for acceptanceRate, whose raw measure is a *drop*) how to convert that
+// measure into the reported delta sign (positive == candidate worse).
+const CANARY_METRIC_CHECKS = [
+  { metric: 'acceptanceRate', thresholdKey: 'maxAcceptanceRateDrop', measure: (control, candidate) => control.acceptanceRate - candidate.acceptanceRate, toDelta: (drop) => -drop },
+  { metric: 'costPerTaskUsd', thresholdKey: 'maxCostIncreasePct', measure: (control, candidate) => pctIncrease(control.costPerTaskUsd, candidate.costPerTaskUsd) },
+  { metric: 'latencyMsP50', thresholdKey: 'maxLatencyIncreasePct', measure: (control, candidate) => pctIncrease(control.latencyMsP50, candidate.latencyMsP50) },
+  { metric: 'rollbackRate', thresholdKey: 'maxRollbackRateIncrease', measure: (control, candidate) => candidate.rollbackRate - control.rollbackRate },
+  { metric: 'securityIncidentCount', thresholdKey: 'maxSecurityIncidentIncrease', measure: (control, candidate) => candidate.securityIncidentCount - control.securityIncidentCount },
+  { metric: 'verifierEscapeRate', thresholdKey: 'maxVerifierEscapeRateIncrease', measure: (control, candidate) => candidate.verifierEscapeRate - control.verifierEscapeRate },
+];
+
 /**
  * Compare candidate canary metrics against control (current production) metrics and decide
  * whether the canary should continue/promote or roll back immediately. Pure function.
@@ -80,37 +92,12 @@ function pctIncrease(before, after) {
  */
 export function evaluateCanary(controlMetrics, candidateMetrics, policy = DEFAULT_CANARY_POLICY) {
   const regressions = [];
-
-  const acceptanceDrop = controlMetrics.acceptanceRate - candidateMetrics.acceptanceRate;
-  if (acceptanceDrop > policy.maxAcceptanceRateDrop) {
-    regressions.push({ metric: 'acceptanceRate', control: controlMetrics.acceptanceRate, candidate: candidateMetrics.acceptanceRate, delta: -acceptanceDrop });
+  for (const { metric, thresholdKey, measure, toDelta = (value) => value } of CANARY_METRIC_CHECKS) {
+    const value = measure(controlMetrics, candidateMetrics);
+    if (value > policy[thresholdKey]) {
+      regressions.push({ metric, control: controlMetrics[metric], candidate: candidateMetrics[metric], delta: toDelta(value) });
+    }
   }
-
-  const costIncrease = pctIncrease(controlMetrics.costPerTaskUsd, candidateMetrics.costPerTaskUsd);
-  if (costIncrease > policy.maxCostIncreasePct) {
-    regressions.push({ metric: 'costPerTaskUsd', control: controlMetrics.costPerTaskUsd, candidate: candidateMetrics.costPerTaskUsd, delta: costIncrease });
-  }
-
-  const latencyIncrease = pctIncrease(controlMetrics.latencyMsP50, candidateMetrics.latencyMsP50);
-  if (latencyIncrease > policy.maxLatencyIncreasePct) {
-    regressions.push({ metric: 'latencyMsP50', control: controlMetrics.latencyMsP50, candidate: candidateMetrics.latencyMsP50, delta: latencyIncrease });
-  }
-
-  const rollbackIncrease = candidateMetrics.rollbackRate - controlMetrics.rollbackRate;
-  if (rollbackIncrease > policy.maxRollbackRateIncrease) {
-    regressions.push({ metric: 'rollbackRate', control: controlMetrics.rollbackRate, candidate: candidateMetrics.rollbackRate, delta: rollbackIncrease });
-  }
-
-  const securityIncrease = candidateMetrics.securityIncidentCount - controlMetrics.securityIncidentCount;
-  if (securityIncrease > policy.maxSecurityIncidentIncrease) {
-    regressions.push({ metric: 'securityIncidentCount', control: controlMetrics.securityIncidentCount, candidate: candidateMetrics.securityIncidentCount, delta: securityIncrease });
-  }
-
-  const escapeIncrease = candidateMetrics.verifierEscapeRate - controlMetrics.verifierEscapeRate;
-  if (escapeIncrease > policy.maxVerifierEscapeRateIncrease) {
-    regressions.push({ metric: 'verifierEscapeRate', control: controlMetrics.verifierEscapeRate, candidate: candidateMetrics.verifierEscapeRate, delta: escapeIncrease });
-  }
-
   return { verdict: regressions.length > 0 ? 'ROLLBACK' : 'CONTINUE', regressions, policy };
 }
 

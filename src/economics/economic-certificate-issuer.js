@@ -86,25 +86,21 @@ export function amplifySurface(evidence = {}, pricing = defaultPricingTable) {
   });
 }
 
+// Measurement fields that simply sum across surfaces; fanOut/retryMultiplier take the max instead
+// (a single hot surface's amplification governs), and modelTokenSpendUsd is priced, not summed raw.
+const SUMMED_MEASUREMENT_FIELDS = [
+  'computeMs', 'dbReads', 'dbWrites', 'dbScans', 'storageGrowthBytes', 'egressBytes',
+  'ciBuildMinutes', 'externalApiCalls', 'loggingVolumeBytes', 'scheduledJobFrequencyPerMonth', 'pollingCadencePerMinute'
+];
+
 function aggregateMeasurements(surfaces = []) {
-  const totals = {
-    computeMs: 0, dbReads: 0, dbWrites: 0, dbScans: 0, storageGrowthBytes: 0, egressBytes: 0,
-    ciBuildMinutes: 0, externalApiCalls: 0, modelTokenSpendUsd: 0, loggingVolumeBytes: 0,
-    workerFanOut: 0, scheduledJobFrequencyPerMonth: 0, pollingCadencePerMinute: 0, retryMultiplier: 1
-  };
+  const totals = Object.fromEntries(SUMMED_MEASUREMENT_FIELDS.map((key) => [key, 0]));
+  totals.modelTokenSpendUsd = 0;
+  totals.workerFanOut = 0;
+  totals.retryMultiplier = 1;
   for (const surface of surfaces) {
-    totals.computeMs += Number(surface.computeMs ?? 0);
-    totals.dbReads += Number(surface.dbReads ?? 0);
-    totals.dbWrites += Number(surface.dbWrites ?? 0);
-    totals.dbScans += Number(surface.dbScans ?? 0);
-    totals.storageGrowthBytes += Number(surface.storageGrowthBytes ?? 0);
-    totals.egressBytes += Number(surface.egressBytes ?? 0);
-    totals.ciBuildMinutes += Number(surface.ciBuildMinutes ?? 0);
-    totals.externalApiCalls += Number(surface.externalApiCalls ?? 0);
-    totals.loggingVolumeBytes += Number(surface.loggingVolumeBytes ?? 0);
+    for (const key of SUMMED_MEASUREMENT_FIELDS) totals[key] += Number(surface[key] ?? 0);
     totals.workerFanOut = Math.max(totals.workerFanOut, Number(surface.fanOut ?? surface.workerFanOut ?? 1));
-    totals.scheduledJobFrequencyPerMonth += Number(surface.scheduledJobFrequencyPerMonth ?? 0);
-    totals.pollingCadencePerMinute += Number(surface.pollingCadencePerMinute ?? 0);
     totals.retryMultiplier = Math.max(totals.retryMultiplier, Number(surface.retryMultiplier ?? 1));
     totals.modelTokenSpendUsd += Number(surface.modelUsage?.inputTokens ?? 0) > 0 || Number(surface.modelUsage?.outputTokens ?? 0) > 0
       ? costPerExecutionUsd({ modelUsage: surface.modelUsage }, defaultPricingTable) : 0;

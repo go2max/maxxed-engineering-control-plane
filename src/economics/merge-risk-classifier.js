@@ -23,6 +23,16 @@ const COST_SURFACE_HINTS = [
   { pattern: /poll|polling/i, cls: MergeRiskClass.C3, reason: 'polling-surface' }
 ];
 
+// Explicit caller-supplied flags, same escalate-and-record shape as COST_SURFACE_HINTS above.
+const RISK_FLAG_HINTS = [
+  { flag: 'touchesScheduledWork', cls: MergeRiskClass.C3, reason: 'flag:scheduled-work' },
+  { flag: 'touchesRetryLogic', cls: MergeRiskClass.C3, reason: 'flag:retry-logic' },
+  { flag: 'touchesFanOut', cls: MergeRiskClass.C4, reason: 'flag:fan-out' },
+  { flag: 'touchesExternalApi', cls: MergeRiskClass.C3, reason: 'flag:external-api' },
+  { flag: 'touchesPaymentOrBilling', cls: MergeRiskClass.C5, reason: 'flag:payment-or-billing' },
+  { flag: 'touchesMigration', cls: MergeRiskClass.C5, reason: 'flag:migration' }
+];
+
 /**
  * Classifies merge-risk C0-C5 automatically from a semantic diff / Engineering IR summary.
  * Deliberately conservative: any ambiguity about whether a surface is cost-relevant escalates
@@ -52,12 +62,10 @@ export class MergeRiskClassifier {
     for (const hint of COST_SURFACE_HINTS) {
       if (hint.pattern.test(haystack)) { cls = max(cls, hint.cls); reasons.push(hint.reason); }
     }
-    if (touchesScheduledWork) { cls = max(cls, MergeRiskClass.C3); reasons.push('flag:scheduled-work'); }
-    if (touchesRetryLogic) { cls = max(cls, MergeRiskClass.C3); reasons.push('flag:retry-logic'); }
-    if (touchesFanOut) { cls = max(cls, MergeRiskClass.C4); reasons.push('flag:fan-out'); }
-    if (touchesExternalApi) { cls = max(cls, MergeRiskClass.C3); reasons.push('flag:external-api'); }
-    if (touchesPaymentOrBilling) { cls = max(cls, MergeRiskClass.C5); reasons.push('flag:payment-or-billing'); }
-    if (touchesMigration) { cls = max(cls, MergeRiskClass.C5); reasons.push('flag:migration'); }
+    const flags = { touchesScheduledWork, touchesRetryLogic, touchesFanOut, touchesExternalApi, touchesPaymentOrBilling, touchesMigration };
+    for (const hint of RISK_FLAG_HINTS) {
+      if (flags[hint.flag]) { cls = max(cls, hint.cls); reasons.push(hint.reason); }
+    }
     // Composition-level amplification: several individually cheap shards combining is itself an
     // escalation trigger even when no single shard crosses a threshold on its own.
     if (Number(compositionParticipants) >= 3 && rank(cls) < rank(MergeRiskClass.C3)) {
