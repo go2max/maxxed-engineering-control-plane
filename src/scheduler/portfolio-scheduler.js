@@ -50,7 +50,7 @@ export function adaptiveLaneCapacity(workers, hardLimit = 16) {
 }
 
 export class PortfolioScheduler {
-  constructor({ graph, repoLaneLimit = 2, totalLaneLimit = 16, repoLaneLimits = {}, policy = null, performanceLedger = null } = {}) {
+  constructor({ graph, repoLaneLimit = 2, totalLaneLimit = 16, repoLaneLimits = {}, policy = null, performanceLedger = null, heartbeatMonitor = null } = {}) {
     if (!graph) throw new Error('graph is required');
     this.graph = graph;
     this.repoLaneLimit = repoLaneLimit;
@@ -58,12 +58,16 @@ export class PortfolioScheduler {
     this.repoLaneLimits = { ...repoLaneLimits };
     this.policy = policy;
     this.performanceLedger = performanceLedger;
+    // Heartbeat suspicion withholds *new* dispatch only; it never revokes a lease a worker
+    // already holds (ClaimAuthority remains the sole ownership authority - see issue #47).
+    this.heartbeatMonitor = heartbeatMonitor;
   }
 
   plan(workers, options = {}) { return this.planWithReport(workers, options).dispatches; }
 
   planWithReport(workers, { now = Date.now(), activeClaims = [], taskPredicate = () => true, admissionDecision = {} } = {}) {
     const originalClaims = structuredClone(activeClaims);
+    workers = this.heartbeatMonitor ? this.heartbeatMonitor.eligibleForNewWork(workers, now) : workers;
     const repoUsage = new Map();
     for (const claim of activeClaims) if (claim.repository) repoUsage.set(claim.repository, (repoUsage.get(claim.repository) ?? 0) + 1);
     const activeClaimStage = (claim) => claim.stage ?? taskStage(this.graph.get(claim.taskKey) ?? {});

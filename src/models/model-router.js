@@ -1,3 +1,20 @@
+import { EscalationTier, defaultTierForCognitionClass, isValidTier, tierRank } from './cognition-classes.js';
+
+// Tiers at or above this rank are treated as scarce/expensive: a candidate at this tier is
+// only eligible when the caller has supplied (or the request implies) an explicit cost
+// justification, so frontier reasoning is never selected merely because it is available.
+const COST_JUSTIFICATION_REQUIRED_FROM = tierRank(EscalationTier.FRONTIER);
+
+function costJustified(request) {
+  // A frontier-tier candidate is justified when the caller states an expected accepted-value
+  // gain (e.g. lower-tier attempts already failed verification, or the task is flagged as
+  // high-novelty/architectural), or explicitly forces the tier. Silence is not justification.
+  if (request.forceMinTier && tierRank(request.forceMinTier) >= COST_JUSTIFICATION_REQUIRED_FROM) return true;
+  if (Number(request.lowerTierAttempts ?? 0) > 0) return true;
+  if (request.costJustification) return true;
+  return false;
+}
+
 export class ModelRouter {
   constructor({ registry, evalLedger = null, allowExternalEscalation = false } = {}) {
     if (!registry) throw new Error('registry is required');
@@ -12,6 +29,17 @@ export class ModelRouter {
     const maxCost = request.maxCostPerMillionTokens ?? 0;
     const taskClass = request.taskClass ?? 'standard';
 
+    // Escalation ladder: resolve the minimum tier this request is allowed to consider. A
+    // request may name a cognitionClass (mapped to its cheapest natural tier) and/or force a
+    // floor tier directly (e.g. after cheaper tiers were tried and rejected/failed
+    // verification). Mechanical/provable work never reaches the frontier tier unless the
+    // caller demonstrates the expected accepted-value gain justifies the cost.
+    const cognitionTier = request.cognitionClass ? defaultTierForCognitionClass(request.cognitionClass) : EscalationTier.CHEAP_MODEL;
+    let minTier = request.forceMinTier ?? cognitionTier;
+    if (!isValidTier(minTier)) throw new Error(`unknown escalation tier: ${minTier}`);
+    const minTierRank = tierRank(minTier);
+    const justified = costJustified(request);
+
     const candidates = this.registry.list().filter((model) => {
       if (!model.enabled || !model.healthy) return false;
       if (!this.allowExternalEscalation && model.kind !== 'local') return false;
@@ -19,12 +47,17 @@ export class ModelRouter {
       if ([...required].some((capability) => !model.capabilities.includes(capability))) return false;
       const blendedCost = model.costPerMillionInputTokens + model.costPerMillionOutputTokens;
       if (maxCost >= 0 && blendedCost > maxCost) return false;
+      if (tierRank(model.tier) < minTierRank) return false;
+      if (tierRank(model.tier) >= COST_JUSTIFICATION_REQUIRED_FROM && !justified) return false;
       if (this.evalLedger) {
         const health = this.evalLedger.healthRecommendation(model.id, taskClass);
         if (!health.healthy) return false;
       }
       return true;
     }).sort((a, b) => {
+      // Cheapest-correct fallback: prefer the cheapest tier that clears eligibility, then
+      // local before external, then observed acceptance/latency, then static tie-breakers.
+      if (a.tier !== b.tier) return tierRank(a.tier) - tierRank(b.tier);
       if (a.kind !== b.kind) return a.kind === 'local' ? -1 : 1;
       if (this.evalLedger) {
         const aStats = this.evalLedger.stats(a.id, taskClass);
@@ -50,9 +83,12 @@ export class ModelRouter {
       fallbackModels,
       explanation: model ? {
         selected: model.id,
+        selectedTier: model.tier,
         local: model.kind === 'local',
         requiredCapabilities: [...required],
         minContextWindow: minContext,
+        minTier,
+        costJustified: justified,
         taskClass,
         fallbackModels,
         externalEscalationAllowed: this.allowExternalEscalation
@@ -60,6 +96,8 @@ export class ModelRouter {
         selected: null,
         requiredCapabilities: [...required],
         minContextWindow: minContext,
+        minTier,
+        costJustified: justified,
         taskClass,
         externalEscalationAllowed: this.allowExternalEscalation,
         reason: 'no healthy eligible model'
