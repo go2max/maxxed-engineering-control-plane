@@ -51,7 +51,18 @@ export class MergeRiskClassifier {
     docsOnly = false,
     compositionParticipants = 1
   } = {}) {
-    if (docsOnly && !changedPaths.some((path) => !/\.(md|txt)$/i.test(path))) {
+    const hasDiffText = diffText.trim().length > 0;
+    const hasChangedPaths = changedPaths.length > 0;
+
+    // No evidence at all to classify from: neither changed paths nor diff text. Per the
+    // fail-closed contract, ambiguity escalates rather than defaulting to a low class -- this
+    // also covers a `docsOnly` assertion made with zero changedPaths, which has no evidence
+    // either way and must not be allowed to resolve to C0.
+    if (!hasChangedPaths && !hasDiffText) {
+      return { class: MergeRiskClass.C3, reasons: ['no-evidence-fail-closed'] };
+    }
+
+    if (docsOnly && hasChangedPaths && changedPaths.every((path) => /\.(md|txt)$/i.test(path))) {
       return { class: MergeRiskClass.C0, reasons: ['docs-only'] };
     }
 
