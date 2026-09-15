@@ -70,7 +70,12 @@ export class PortfolioScheduler {
 
     const workerSlots = new Map(workers.map((worker) => [worker.workerId, Math.max(0, worker.capacity?.freeSlots ?? 0)]));
     const adaptiveLimit = adaptiveLaneCapacity(workers, this.totalLaneLimit);
-    const remainingLaneBudget = Math.max(0, adaptiveLimit - activeClaims.length);
+    // adaptiveLimit is derived only from the currently-available `workers` passed in this cycle;
+    // workers already busy on activeClaims elsewhere in the fleet are correctly absent from that
+    // list, so their claims must not be subtracted from it a second time (that under-counts real
+    // headroom). Instead, cap this cycle's new dispatches by both the available-worker capacity
+    // and the global totalLaneLimit ceiling net of lanes already in use.
+    const remainingLaneBudget = Math.max(0, Math.min(adaptiveLimit, this.totalLaneLimit - activeClaims.length));
     const policyBackpressure = [];
     const candidates = this.graph.frontier(taskPredicate).flatMap((task) => {
       const stage = taskStage(task);

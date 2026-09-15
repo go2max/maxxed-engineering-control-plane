@@ -20,7 +20,10 @@ function claimedRuntime({ restartable = true, ttlMs = 10_000, now = 1_000 } = {}
   return { graph, claims, repairs, claim };
 }
 
-test('runtime snapshot restores live lease authority and resource scope locks', () => {
+test('restart fences a live lease and returns restartable task to ready, even before its TTL lapses', () => {
+  // Per docs/changes/010-runtime-persistence.md: a process restart invalidates whatever
+  // in-memory ownership a worker held, regardless of whether the claim's TTL has
+  // technically expired. This is deliberately stricter than TTL-based expiry.
   const source = claimedRuntime({ ttlMs: 10_000, now: 1_000 });
   const snapshot = snapshotRuntime(source);
   const graph = new TaskGraph();
@@ -29,11 +32,12 @@ test('runtime snapshot restores live lease authority and resource scope locks', 
 
   const restored = restoreRuntime(snapshot, { graph, claims, repairs, now: 5_000 });
 
-  assert.equal(restored.activeClaims, 1);
-  assert.equal(restored.expiredClaims, 0);
-  assert.equal(graph.get('task-a').state, TaskState.CLAIMED);
-  assert.equal(claims.validate(source.claim, 5_000), true);
-  assert.equal(claims.claim({ taskKey: 'task-b', ownerId: 'worker-2', scopes: ['scope:shared'] }, 5_001), null);
+  assert.equal(restored.activeClaims, 0);
+  assert.equal(restored.expiredClaims, 1);
+  assert.equal(graph.get('task-a').state, TaskState.READY);
+  assert.equal(claims.validate(source.claim, 5_000), false);
+  const replacement = claims.claim({ taskKey: 'task-a', ownerId: 'worker-2', scopes: ['repo:org/repo', 'scope:shared'] }, 5_001);
+  assert.ok(replacement.generation > source.claim.generation);
 });
 
 test('expired restored lease is fenced and restartable task returns to frontier', () => {

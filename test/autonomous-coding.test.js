@@ -58,7 +58,11 @@ test('throughput governor doubles healthy baseline but contracts on backpressure
   assert.equal(healthy.throttled, false);
 
   const backedUp = governor.target({ availableCapacity: 8, verifierBacklog: 5, recentAccepted: 10, recentFailed: 1 });
-  assert.equal(backedUp.allowedConcurrency, 2);
+  // Verifier backlog closes implementation admission (see stage-aware-backpressure.test.js)
+  // rather than shrinking overall allowed concurrency, so verification/repair lanes keep full
+  // capacity to drain the backlog.
+  assert.equal(backedUp.allowedConcurrency, 4);
+  assert.equal(backedUp.implementationAdmissionOpen, false);
   assert.equal(backedUp.reasons.includes('verifier-backlog'), true);
 
   const failing = governor.target({ availableCapacity: 8, verifierBacklog: 0, recentAccepted: 2, recentFailed: 2 });

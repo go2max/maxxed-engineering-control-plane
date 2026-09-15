@@ -30,6 +30,15 @@ export class MicroShardPlanner {
     const downstream = Math.max(1, Math.min(Number(availableSlots || 1), Number(verifierSlots || 1), Number(composerSlots || 1) * 8, Number(maxShards || 1)));
     const groups = [];
     for (const unit of normalized.sort((a, b) => b.estimatedLines - a.estimatedLines || a.id.localeCompare(b.id))) {
+      // Prefer maximal fan-out first: while downstream capacity remains, give the unit its
+      // own shard rather than eagerly packing it into an existing group. Packing by proximity
+      // to targetLines is reserved for once every available downstream slot is already in use
+      // (or the unit conflicts with every open group), so a handful of tiny independent units
+      // still expand to use available parallelism instead of collapsing into a single shard.
+      if (groups.length < downstream && !groups.some((group) => group.some((row) => overlaps(row, unit)))) {
+        groups.push([unit]);
+        continue;
+      }
       let candidate = groups
         .map((group, index) => ({ index, lines: group.reduce((sum, row) => sum + row.estimatedLines, 0), conflict: group.some((row) => overlaps(row, unit)) }))
         .filter((row) => !row.conflict && row.lines + unit.estimatedLines <= this.maxLines)
@@ -40,12 +49,18 @@ export class MicroShardPlanner {
     }
 
     const shards = groups.map((group, index) => this.#shard(parentTaskKey, baseSha, group, index + 1));
+    const hasMeasuredMonolithicMs = estimatedMonolithicMs != null;
     const monolithicMs = Number(estimatedMonolithicMs ?? normalized.reduce((sum, unit) => sum + unit.estimatedMs, 0));
     const parallelExecutionMs = Math.max(...shards.map((shard) => shard.estimatedMs), 0);
     const coordinationMs = shards.length * this.fixedShardOverheadMs + this.compositionOverheadMs;
     const projectedMs = parallelExecutionMs + coordinationMs;
     const projectedSavingsMs = monolithicMs - projectedMs;
-    if (shards.length <= 1 || projectedSavingsMs <= 0 || normalized.reduce((sum, unit) => sum + unit.estimatedLines, 0) < this.minLines * 2) {
+    // The total-lines floor is a safety net for the case where we're projecting savings from a
+    // heuristic (summed unit estimatedMs), which is unreliable for trivially small work. When the
+    // caller supplies a measured estimatedMonolithicMs, the savings projection is authoritative and
+    // shouldn't be overridden by a line-count proxy.
+    const belowMinimumWork = !hasMeasuredMonolithicMs && normalized.reduce((sum, unit) => sum + unit.estimatedLines, 0) < this.minLines * 2;
+    if (shards.length <= 1 || projectedSavingsMs <= 0 || belowMinimumWork) {
       return { mode: 'single', reason: 'coordination-cost-exceeds-savings', monolithicMs, projectedMs, projectedSavingsMs, shards: [this.#shard(parentTaskKey, baseSha, normalized, 1)] };
     }
     return {
