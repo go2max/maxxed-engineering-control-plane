@@ -36,6 +36,7 @@ import { WorkerPerformanceLedger } from '../scheduler/worker-performance.js';
 import { MicroShardPlanner } from '../patch/shard-planner.js';
 import { PatchFabric } from '../patch/patch-fabric.js';
 import { MicroShardCoordinator } from '../patch/micro-shard-coordinator.js';
+import { EvidenceGraph, CertificateCache } from '../verification/proof-certificate.js';
 
 const host = process.env.MAXXED_CONTROL_HOST ?? '127.0.0.1';
 const port = Number(process.env.MAXXED_CONTROL_PORT ?? 7790);
@@ -93,7 +94,9 @@ const challengeSuiteScheduler = new ChallengeSuiteScheduler({
 });
 const shardPlanner = new MicroShardPlanner();
 const patchFabric = new PatchFabric();
-const microShards = new MicroShardCoordinator({ runtime, patchFabric, shardPlanner });
+const evidenceGraph = new EvidenceGraph();
+const certificateCache = new CertificateCache();
+const microShards = new MicroShardCoordinator({ runtime, patchFabric, shardPlanner, evidenceGraph, certificateCache });
 const leverageEngine = new LeverageEngine({ cas: solutionCas, graph: semanticGraph, transforms, repairs: repairMemory });
 const leverage = new LeverageRuntimeAdapter({ runtime, engine: leverageEngine, cas: solutionCas, harvester: trajectoryHarvester, repairs: repairMemory });
 const derivedState = new DerivedStateManager({ solutionCas, artifactCache, semanticGraph, trajectoryHarvester, repairMemory });
@@ -102,7 +105,7 @@ const leverageComponents = {
   leverage, solutionCas, artifactCache, artifactStore, semanticGraph, transforms, trajectoryHarvester, repairMemory,
   productFamilies, bottleneckOptimizer, maintenancePlanner, replayProjector, sourceIndexer, codeIndexes, contextCompiler,
   speculativePlanner, impactTestSelector, testReliability, challengeSuiteScheduler, workerPerformance, shardPlanner, patchFabric, microShards, derivedState, leverageEngine,
-  toolResultCache, executionCheckpoints
+  toolResultCache, executionCheckpoints, evidenceGraph, certificateCache
 };
 
 const store = new RuntimeStateStore(statePath);
@@ -111,7 +114,7 @@ const patchStore = new RuntimeStateStore(patchStatePath);
 const restored = await store.load();
 if (restored) runtime.restore(restored);
 const restoredLeverage = await leverageStore.load();
-if ([1,2,3,4,5,6].includes(restoredLeverage?.version)) {
+if ([1,2,3,4,5,6,7].includes(restoredLeverage?.version)) {
   solutionCas.restore(restoredLeverage.solutionCas);
   artifactCache.restore(restoredLeverage.artifactCache);
   semanticGraph.restore(restoredLeverage.semanticGraph);
@@ -125,6 +128,16 @@ if ([1,2,3,4,5,6].includes(restoredLeverage?.version)) {
   if (restoredLeverage.executionCheckpoints) executionCheckpoints.restore(restoredLeverage.executionCheckpoints);
   if (restoredLeverage.shardPlanner) shardPlanner.restore(restoredLeverage.shardPlanner);
   if (restoredLeverage.challengeSuiteScheduler) challengeSuiteScheduler.restore(restoredLeverage.challengeSuiteScheduler);
+  if (restoredLeverage.evidenceGraph) {
+    const restoredGraph = EvidenceGraph.restore(restoredLeverage.evidenceGraph);
+    evidenceGraph.nodes = restoredGraph.nodes;
+    evidenceGraph.edges = restoredGraph.edges;
+  }
+  if (restoredLeverage.certificateCache) {
+    const restoredCache = CertificateCache.restore(restoredLeverage.certificateCache);
+    certificateCache.byFingerprint = restoredCache.byFingerprint;
+    certificateCache.invalidated = restoredCache.invalidated;
+  }
 }
 for (const [family, baseline] of Object.entries(CANONICAL_PRODUCT_FAMILIES)) if (!productFamilies.baselines.has(family)) productFamilies.registerBaseline({ family, ...baseline });
 const restoredPatch = await patchStore.load();
@@ -142,7 +155,7 @@ const persist = async () => {
     await store.save(runtime.snapshot());
     await patchStore.save(patchFabric.snapshot());
     await leverageStore.save({
-      version: 6,
+      version: 7,
       solutionCas: solutionCas.snapshot(),
       artifactCache: artifactCache.snapshot(),
       semanticGraph: semanticGraph.snapshot(),
@@ -155,7 +168,9 @@ const persist = async () => {
       toolResultCache: toolResultCache.snapshot(),
       executionCheckpoints: executionCheckpoints.snapshot(),
       shardPlanner: shardPlanner.snapshot(),
-      challengeSuiteScheduler: challengeSuiteScheduler.snapshot()
+      challengeSuiteScheduler: challengeSuiteScheduler.snapshot(),
+      evidenceGraph: evidenceGraph.snapshot(),
+      certificateCache: certificateCache.snapshot()
     });
   } catch (error) { console.error(JSON.stringify({ event: 'control-plane-persistence-failed', error: error.message })); }
   finally { saving = false; }

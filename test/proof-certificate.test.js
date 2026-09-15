@@ -134,6 +134,54 @@ test('missing validation-evidence node surfaces missing-proof reason to release 
   assert.equal(coverage.missingProofReasons[0].nodeId, 'shard-1');
 });
 
+test('evidence graph and certificate cache survive a real snapshot -> JSON -> restore round trip', () => {
+  // Mirrors src/service/main.js's persistence pattern: snapshot() -> JSON.stringify (as written to
+  // the leverage state file) -> JSON.parse (as read back on restart) -> static restore(). This is
+  // the exact path that was missing before the persistence fix, so a regression here (e.g. dropping
+  // evidenceGraph/certificateCache from the persist/restore wiring again) must fail this test.
+  const graph = new EvidenceGraph();
+  graph.addNode({ id: 'intent-1', kind: EvidenceNodeKind.INTENT, data: { taskKey: 'task-1' } });
+  graph.addNode({ id: 'packet-1', kind: EvidenceNodeKind.WORK_PACKET, parents: ['intent-1'] });
+  graph.addNode({ id: 'shard-1', kind: EvidenceNodeKind.SHARD, parents: ['packet-1'] });
+
+  const cache = new CertificateCache();
+  const certificate = issueProofCertificate(baseCertificateInput());
+  cache.put(certificate);
+  graph.addNode({
+    id: 'validation-1', kind: EvidenceNodeKind.VALIDATION_EVIDENCE, parents: ['shard-1'],
+    data: { certificateFingerprint: certificate.fingerprint }
+  });
+
+  const persistedGraphJson = JSON.stringify(graph.snapshot());
+  const persistedCacheJson = JSON.stringify(cache.snapshot());
+
+  // Simulate a fresh process: brand-new instances, then restore from the persisted JSON.
+  const restoredGraph = EvidenceGraph.restore(JSON.parse(persistedGraphJson));
+  const restoredCache = CertificateCache.restore(JSON.parse(persistedCacheJson));
+
+  assert.ok(restoredGraph.nodes.has('intent-1'));
+  assert.ok(restoredGraph.nodes.has('shard-1'));
+  assert.ok(restoredGraph.nodes.has('validation-1'));
+  assert.equal(restoredGraph.nodes.get('validation-1').data.certificateFingerprint, certificate.fingerprint);
+
+  const restoredCertificate = restoredCache.get(certificate.fingerprint);
+  assert.ok(restoredCertificate, 'certificate must survive the round trip');
+  assert.equal(restoredCertificate.fingerprint, certificate.fingerprint);
+  assert.equal(restoredCertificate.accepted, true);
+  assert.equal(verifyCertificateIntegrity(restoredCertificate), true);
+
+  // evidenceCoverage against the restored graph + restored cache must still resolve, proving the
+  // restored certificate is actually usable for release-readiness checks post-restart, not just
+  // present in the map.
+  graph.addNode({ id: 'artifact-1', kind: EvidenceNodeKind.ARTIFACT, parents: ['validation-1'] });
+  graph.addNode({ id: 'merge-1', kind: EvidenceNodeKind.MERGE, parents: ['artifact-1'] });
+  const restoredGraphWithRelease = EvidenceGraph.restore(JSON.parse(JSON.stringify(graph.snapshot())));
+  restoredGraphWithRelease.addNode({ id: 'release-1', kind: EvidenceNodeKind.RELEASE, parents: ['merge-1'] });
+  const coverage = restoredGraphWithRelease.evidenceCoverage('release-1', { certificateCache: restoredCache });
+  assert.equal(coverage.readyForRelease, true);
+  assert.equal(coverage.missingProofReasons.length, 0);
+});
+
 test('narrow invalidation only affects the changed fingerprint', () => {
   const cache = new CertificateCache();
   const certificateA = issueProofCertificate(baseCertificateInput());

@@ -167,6 +167,24 @@ export class CertificateCache {
     if (!certificate || this.invalidated.has(fingerprint)) return null;
     return verifyCertificateIntegrity(certificate) ? structuredClone(certificate) : null;
   }
+
+  snapshot() {
+    return { version: 1, certificates: [...this.byFingerprint.values()].map((certificate) => structuredClone(certificate)), invalidated: [...this.invalidated] };
+  }
+
+  static restore(snapshot) {
+    if (!snapshot || snapshot.version !== 1) throw new Error('unsupported certificate cache snapshot');
+    const cache = new CertificateCache();
+    for (const certificate of snapshot.certificates ?? []) {
+      // Restore verbatim rather than through put(), which would re-verify integrity; a certificate
+      // that failed integrity before persisting should never have been snapshotted in the first
+      // place, but we still fail closed here rather than silently resurrecting a tampered entry.
+      if (!verifyCertificateIntegrity(certificate)) continue;
+      cache.byFingerprint.set(certificate.fingerprint, structuredClone(certificate));
+    }
+    for (const fingerprint of snapshot.invalidated ?? []) cache.invalidated.add(fingerprint);
+    return cache;
+  }
 }
 
 // Evidence Graph node kinds, matching the issue's required lineage:
