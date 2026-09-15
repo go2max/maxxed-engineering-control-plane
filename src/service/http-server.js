@@ -67,7 +67,9 @@ export function createControlPlaneServer({ runtime, adminToken, codingLoop = nul
         codeIndexAdapters: leverageComponents.codeIndexes?.manifest?.() ?? [],
         training: leverageComponents.trajectoryHarvester.manifest(),
         workerSpecializations: leverageComponents.workerPerformance?.rows?.size ?? 0,
-        flakyTests: leverageComponents.testReliability?.quarantineCandidates?.().length ?? 0
+        flakyTests: leverageComponents.testReliability?.quarantineCandidates?.().length ?? 0,
+        toolResultCache: leverageComponents.toolResultCache ? { entries: leverageComponents.toolResultCache.entries.size, ...leverageComponents.toolResultCache.stats } : null,
+        executionCheckpoints: leverageComponents.executionCheckpoints?.checkpoints?.size ?? 0
       } : { enabled: false });
       if (req.method === 'GET' && url.pathname === '/leverage/training') {
         if (!leverageComponents) return send(res, 503, { error: 'leverage fabric is not configured' });
@@ -123,6 +125,33 @@ export function createControlPlaneServer({ runtime, adminToken, codingLoop = nul
         if (patch.action === 'compose') return send(res, 200, leverageComponents.patchFabric.compose(patch.sessionId, { baseFiles: body.baseFiles ?? {} }));
         if (patch.action === 'verify') return send(res, 200, leverageComponents.patchFabric.recordParentVerification(patch.sessionId, body));
         if (patch.action === 'cancel') return send(res, 200, leverageComponents.patchFabric.cancel(patch.sessionId, body.reason));
+      }
+
+      if (req.method === 'POST' && url.pathname === '/leverage/tool-cache/peek') {
+        if (!leverageComponents?.toolResultCache) return send(res, 503, { error: 'tool result cache is not configured' });
+        const body = await readJson(req);
+        return send(res, 200, { hit: leverageComponents.toolResultCache.peek(body.key ?? body) });
+      }
+      if (req.method === 'POST' && url.pathname === '/leverage/tool-cache/invalidate') {
+        if (!leverageComponents?.toolResultCache) return send(res, 503, { error: 'tool result cache is not configured' });
+        const body = await readJson(req);
+        const removed = body.scopeFingerprint
+          ? leverageComponents.toolResultCache.invalidateScope(body.scopeFingerprint)
+          : leverageComponents.toolResultCache.invalidateTags(body.tags ?? []);
+        return send(res, 200, { removed });
+      }
+      if (req.method === 'POST' && url.pathname === '/leverage/checkpoint/save') {
+        if (!leverageComponents?.executionCheckpoints) return send(res, 503, { error: 'execution checkpoint store is not configured' });
+        const body = await readJson(req);
+        if (!body.taskKey) return send(res, 400, { error: 'taskKey is required' });
+        return send(res, 200, leverageComponents.executionCheckpoints.save(body.taskKey, body.checkpoint ?? {}, { generation: body.generation ?? 1 }));
+      }
+      if (req.method === 'GET' && url.pathname === '/leverage/checkpoint/resume') {
+        if (!leverageComponents?.executionCheckpoints) return send(res, 503, { error: 'execution checkpoint store is not configured' });
+        const taskKey = url.searchParams.get('taskKey');
+        if (!taskKey) return send(res, 400, { error: 'taskKey is required' });
+        const minGeneration = Number(url.searchParams.get('minGeneration') ?? 0);
+        return send(res, 200, { checkpoint: leverageComponents.executionCheckpoints.resume(taskKey, { minGeneration }) });
       }
 
       if (req.method === 'POST' && url.pathname === '/leverage/plan') {
