@@ -14,16 +14,22 @@ export function snapshotRuntime({ graph, claims, repairs }) {
 export function restoreRuntime(snapshot, { graph, claims, repairs, now = Date.now() }) {
   if (!snapshot || snapshot.version !== 1) throw new Error('unsupported runtime snapshot');
   claims.restore(snapshot.claims);
-  const expiredClaims = claims.sweepExpired(now);
-  const activeClaimTaskKeys = new Set(claims.list().map((claim) => claim.taskKey));
-  const expiredClaimTaskKeys = new Set(expiredClaims.map((claim) => claim.taskKey));
+  // Safety rule (docs/changes/010-runtime-persistence.md): active claims are never
+  // restored after restart, regardless of whether their TTL has technically lapsed.
+  // A process restart invalidates whatever in-memory ownership a worker held, so every
+  // claim that survived the snapshot must be fenced (generation bumped, claim dropped)
+  // rather than merely swept by wall-clock expiry.
+  const restoredClaims = claims.list();
+  for (const claim of restoredClaims) claims.fence(claim.taskKey);
+  const expiredClaimTaskKeys = new Set(restoredClaims.map((claim) => claim.taskKey));
+  const activeClaimTaskKeys = new Set();
   repairs.restore(snapshot.repairs);
   graph.restore(snapshot.graph, now, { activeClaimTaskKeys, expiredClaimTaskKeys });
   return {
     restoredAt: now,
     taskCount: graph.list().length,
     activeClaims: claims.list().length,
-    expiredClaims: expiredClaims.length
+    expiredClaims: restoredClaims.length
   };
 }
 
