@@ -1,1 +1,4 @@
 node_modules/
+
+# runtime-generated data (e.g. live outcome-store JSONL logs)
+var/
