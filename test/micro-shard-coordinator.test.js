@@ -142,6 +142,79 @@ test('terminal repair failure also fails the owning shard session and parent', (
   assert.equal(patchFabric.list()[0].state, 'FAILED');
 });
 
+test('accepted shard produces real lifecycle telemetry and a real proof certificate', () => {
+  const runtime = runtimeHarness();
+  const patchFabric = new PatchFabric();
+  const planner = new MicroShardPlanner({ fixedShardOverheadMs: 0, compositionOverheadMs: 0, targetLines: 100, maxLines: 150 });
+  const coordinator = new MicroShardCoordinator({ runtime, patchFabric, shardPlanner: planner });
+  addShardableParent(runtime, 'observed-parent');
+
+  coordinator.materialize({ workers: [{ capacity: { freeSlots: 4 } }], verifierSlots: 4, composerSlots: 1, now: 100 });
+  const shards = runtime.graph.list().filter((task) => task.metadata?.patchFabric?.kind === 'shard');
+  assert.ok(shards.length >= 2);
+
+  // Admission telemetry is real, not deferred to acceptance.
+  assert.equal(coordinator.shardObservability.trackers.size, shards.length);
+  for (const shard of shards) {
+    const tracker = coordinator.shardObservability.trackers.get(shard.metadata.patchFabric.identityDigest);
+    assert.ok(tracker, `expected a tracker for ${shard.key}`);
+    assert.deepEqual(tracker.events.map((row) => row.event), ['admitted', 'queued']);
+    assert.ok(coordinator.evidenceGraph.nodes.has(`shard:${shard.key}`));
+  }
+
+  const reconciled = [];
+  for (const [index, shard] of shards.entries()) {
+    const file = shard.metadata.execution.patchBundle.scope.files[0];
+    const afterContent = shard.metadata.execution.precomputedWrites?.find((write) => write.path === file)?.content ?? `// changed ${file}\n`;
+    const patchBundle = createPatchBundle({
+      taskKey: shard.key, parentTaskKey: 'observed-parent', shardKey: shard.key, repository: 'org/repo', baseSha: BASE,
+      workerId: `worker-${index + 1}`, generation: 1, scope: shard.metadata.execution.patchBundle.scope,
+      writes: [{ path: file, beforeContent: `// old ${file}\n`, content: afterContent }], checks: {}
+    });
+    const bundle = evidenceBundle({ patchBundle });
+    bundle.payload.producerId = `worker-${index + 1}`;
+    bundle.payload.verifierId = `verifier-${index + 1}`;
+    runtime.graph.setState(shard.key, TaskState.ACCEPTED, { evidenceBundle: bundle });
+    reconciled.push({ taskKey: shard.key, action: 'ACCEPT' });
+  }
+
+  coordinator.reconcile(reconciled, { now: 200 });
+
+  for (const shard of shards) {
+    const tracker = coordinator.shardObservability.trackers.get(shard.metadata.patchFabric.identityDigest);
+    assert.deepEqual(tracker.events.map((row) => row.event), ['admitted', 'queued', 'mutation-emitted', 'verify-complete', 'accepted']);
+    assert.equal(tracker.status(), 'accepted');
+
+    const evidenceNode = coordinator.evidenceGraph.nodes.get(`evidence:${shard.key}`);
+    assert.ok(evidenceNode, `expected an evidence-graph node for ${shard.key}`);
+    const certificate = coordinator.certificateCache.get(evidenceNode.data.certificateFingerprint);
+    assert.ok(certificate, 'certificate must be retrievable from the cache by its fingerprint');
+    assert.equal(certificate.accepted, true, 'certificate should be accepted given independently-verified evidence');
+    assert.equal(certificate.sourceSha, BASE);
+    assert.equal(certificate.hasExternalEvidence, true);
+  }
+
+  const overall = coordinator.shardObservability.overallCoverage();
+  assert.equal(overall.shardCount, shards.length);
+});
+
+test('rejected shard records a real REJECTED lifecycle event, not a fabricated one', () => {
+  const runtime = runtimeHarness();
+  const patchFabric = new PatchFabric();
+  const coordinator = new MicroShardCoordinator({ runtime, patchFabric, shardPlanner: new MicroShardPlanner({ fixedShardOverheadMs: 0, compositionOverheadMs: 0 }) });
+  addShardableParent(runtime, 'rejected-parent');
+  coordinator.materialize({ workers: [{ capacity: { freeSlots: 4 } }], verifierSlots: 4, composerSlots: 1, now: 100 });
+  const shard = runtime.graph.list().find((task) => task.metadata?.patchFabric?.kind === 'shard');
+  runtime.graph.setState(shard.key, TaskState.FAILED, { reason: 'repair budget exhausted' });
+
+  coordinator.reconcile([{ taskKey: shard.key, action: 'TERMINATE' }], { now: 200 });
+
+  const tracker = coordinator.shardObservability.trackers.get(shard.metadata.patchFabric.identityDigest);
+  assert.ok(tracker);
+  assert.deepEqual(tracker.events.map((row) => row.event), ['admitted', 'queued', 'rejected']);
+  assert.equal(tracker.status(), 'rejected');
+});
+
 test('critical-risk parent is not micro-sharded', () => {
   const runtime = runtimeHarness();
   const coordinator = new MicroShardCoordinator({ runtime, patchFabric: new PatchFabric(), shardPlanner: new MicroShardPlanner({ fixedShardOverheadMs: 0, compositionOverheadMs: 0 }) });

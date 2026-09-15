@@ -2,6 +2,8 @@ import { TaskState } from '../core/task-graph.js';
 import { digest } from '../leverage/solution-cas.js';
 import { CompositionBisector } from './composition-bisector.js';
 import { HotSymbolLock } from './hot-symbol-lock.js';
+import { ShardObservabilityRegistry, ShardLifecycleEvent, shardIdentity } from '../telemetry/shard-observability.js';
+import { CertificateCache, EvidenceGraph, EvidenceNodeKind, EvidenceComposability, issueProofCertificate } from '../verification/proof-certificate.js';
 
 const SHA40 = /^[0-9a-f]{40}$/i;
 
@@ -87,7 +89,21 @@ function shardOutcomeFrom(action) {
 }
 
 export class MicroShardCoordinator {
-  constructor({ runtime, patchFabric, shardPlanner, hotSymbolLock = new HotSymbolLock(), compositionBisector = new CompositionBisector() } = {}) {
+  // Live by default: real shard lifecycle events (issue #67) and proof certificates (issue #69)
+  // are recorded/issued on every materialize()/reconcile() call. Callers may inject their own
+  // ShardObservabilityRegistry / CertificateCache / EvidenceGraph (e.g. to share one instance
+  // across coordinators or to persist/restore it), but there is no flag to disable the wiring —
+  // this is the live scheduling/acceptance path, not shadow mode.
+  constructor({
+    runtime, patchFabric, shardPlanner,
+    hotSymbolLock = new HotSymbolLock(),
+    compositionBisector = new CompositionBisector(),
+    shardObservability = new ShardObservabilityRegistry(),
+    certificateCache = new CertificateCache(),
+    evidenceGraph = new EvidenceGraph(),
+    policyVersion = 'micro-shard-coordinator-v1',
+    environmentFingerprint = 'micro-shard-coordinator-default-env'
+  } = {}) {
     if (!runtime || !patchFabric || !shardPlanner) throw new Error('runtime, patchFabric and shardPlanner are required');
     this.runtime = runtime;
     this.patchFabric = patchFabric;
@@ -96,6 +112,30 @@ export class MicroShardCoordinator {
     this.compositionBisector = compositionBisector;
     this.pendingBisectionVerifications = new Map();
     this.activeBisections = new Set();
+    this.shardObservability = shardObservability;
+    this.certificateCache = certificateCache;
+    this.evidenceGraph = evidenceGraph;
+    this.policyVersion = policyVersion;
+    this.environmentFingerprint = environmentFingerprint;
+  }
+
+  #shardIdentity(parentTaskKey, shardKey, baseSha) {
+    return shardIdentity({
+      parentTaskKey, shardKey, sourceSha: baseSha, policyVersion: this.policyVersion,
+      environmentFingerprint: this.environmentFingerprint, leaseGeneration: 1
+    });
+  }
+
+  #ensureEvidenceLineage(parent, sessionId) {
+    const intentId = `intent:${parent.key}`;
+    if (!this.evidenceGraph.nodes.has(intentId)) {
+      this.evidenceGraph.addNode({ id: intentId, kind: EvidenceNodeKind.INTENT, data: { taskKey: parent.key, objective: parent.objective } });
+    }
+    const workPacketId = `work-packet:${sessionId}`;
+    if (!this.evidenceGraph.nodes.has(workPacketId)) {
+      this.evidenceGraph.addNode({ id: workPacketId, kind: EvidenceNodeKind.WORK_PACKET, data: { sessionId }, parents: [intentId] });
+    }
+    return workPacketId;
   }
 
   materialize({ workers = [], verifierSlots = null, composerSlots = 1, now = Date.now() } = {}) {
@@ -167,7 +207,23 @@ export class MicroShardCoordinator {
       });
       this.runtime.graph.setState(parent.key, TaskState.BLOCKED, { reason: 'patch-shards-in-flight', patchSessionId: session.sessionId, shardCount: plan.shards.length });
 
+      const workPacketId = this.#ensureEvidenceLineage(parent, session.sessionId);
+
       for (const shard of plan.shards) {
+        // Real shard lifecycle telemetry (issue #67): the shard is admitted into the coordinator
+        // and immediately enters the ready queue as its child task is ingested below.
+        const identity = this.#shardIdentity(parent.key, shard.shardKey, baseSha);
+        const tracker = this.shardObservability.tracker(identity, {
+          repository: parent.repository, parentTaskKey: parent.key, taskClass: 'micro-shard', productFamily: parent.product
+        });
+        tracker.record({ event: ShardLifecycleEvent.ADMITTED, wallClockMs: now });
+        tracker.record({ event: ShardLifecycleEvent.QUEUED, wallClockMs: now });
+
+        const shardNodeId = `shard:${shard.shardKey}`;
+        if (!this.evidenceGraph.nodes.has(shardNodeId)) {
+          this.evidenceGraph.addNode({ id: shardNodeId, kind: EvidenceNodeKind.SHARD, data: { shardKey: shard.shardKey, files: shard.scope.files }, parents: [workPacketId] });
+        }
+
         const precomputedWrites = flattenShardWrites(shard);
         const testCommands = shardChecks(parent, shard);
         const shardTransformId = precomputedWrites.length ? (shard.payloads.find((payload) => payload?.transformId)?.transformId ?? execution.transformId ?? null) : undefined;
@@ -193,7 +249,8 @@ export class MicroShardCoordinator {
             ...(precomputedWrites.length ? {} : { modelRequest: structuredClone(parent.metadata.modelRequest ?? null) }),
             patchFabric: {
               kind: 'shard', sessionId: session.sessionId, parentTaskKey: parent.key, shardKey: shard.shardKey, baseSha,
-              executorId, taskClass, estimatedLines: shard.estimatedLines, hotIdentifiers: this.hotSymbolLock.contendedIdentifiers(shard)
+              executorId, taskClass, estimatedLines: shard.estimatedLines, hotIdentifiers: this.hotSymbolLock.contendedIdentifiers(shard),
+              identityDigest: identity.identityDigest
             },
             execution: {
               ...structuredClone(execution),
@@ -253,6 +310,10 @@ export class MicroShardCoordinator {
       if (!shard || patch?.kind !== 'shard') continue;
       const session = this.patchFabric.get(patch.sessionId);
       if (!session || ['FAILED', 'ACCEPTED', 'CANCELLED'].includes(session.state)) continue;
+      const failedTracker = shard.metadata?.patchFabric?.identityDigest
+        ? this.shardObservability.trackers.get(shard.metadata.patchFabric.identityDigest)
+        : null;
+      if (failedTracker) failedTracker.record({ event: ShardLifecycleEvent.REJECTED, wallClockMs: now });
       this.patchFabric.fail(patch.sessionId, {
         phase: 'shard',
         error: `terminal micro-shard failure: ${shard.key}`,
@@ -289,6 +350,59 @@ export class MicroShardCoordinator {
       if (!session) throw new Error(`missing patch session for shard: ${task.key}`);
       if (session.state === 'FAILED') continue;
       if (session.bundleDigests?.[patch.shardKey]) continue;
+
+      // Real shard lifecycle telemetry (issue #67): the shard's mutation has been emitted and
+      // independently accepted by the runtime's own verification, so record the remaining
+      // observable stages up to the shard's terminal state before submitting it into composition.
+      const tracker = patch.identityDigest ? this.shardObservability.trackers.get(patch.identityDigest) : null;
+      if (tracker) {
+        tracker.record({ event: ShardLifecycleEvent.MUTATION_EMITTED, wallClockMs: now });
+        tracker.record({ event: ShardLifecycleEvent.VERIFY_COMPLETE, wallClockMs: now });
+        tracker.record({ event: ShardLifecycleEvent.ACCEPTED, wallClockMs: now });
+      }
+
+      // Real proof certificate (issue #69): issued from the same accepted evidence bundle that
+      // just drove the shard task's own acceptance — never a synthetic/placeholder certificate.
+      try {
+        const producerId = evidenceBundle.payload?.producerId ?? evidenceBundle.producerId ?? bundle.workerId ?? patch.shardKey;
+        const verifierId = evidenceBundle.payload?.verifierId ?? evidenceBundle.verifierId ?? null;
+        const independentlyVerified = Boolean(verifierId) && verifierId !== producerId;
+        const certificate = issueProofCertificate({
+          evidenceBundle,
+          sourceSha: patch.baseSha,
+          mutationDigest: bundle.bundleDigest,
+          environmentFingerprint: this.environmentFingerprint,
+          policyVersion: this.policyVersion,
+          executorId: producerId,
+          verifierId: independentlyVerified ? verifierId : `${producerId}:self-verified`,
+          acceptanceContractDigest: digest(task.metadata?.acceptance ?? {}),
+          checks: {
+            tests: [{
+              name: 'shard-acceptance-evidence-bundle',
+              passed: true,
+              verifiedBy: independentlyVerified ? verifierId : null,
+              selfReported: !independentlyVerified,
+              detail: { evidenceBundleDigest: evidenceBundle.digest }
+            }]
+          },
+          composability: EvidenceComposability.COMPOSABLE,
+          now
+        });
+        this.certificateCache.put(certificate);
+        const shardNodeId = `shard:${patch.shardKey}`;
+        const evidenceNodeId = `evidence:${task.key}`;
+        if (this.evidenceGraph.nodes.has(shardNodeId) && !this.evidenceGraph.nodes.has(evidenceNodeId)) {
+          this.evidenceGraph.addNode({
+            id: evidenceNodeId, kind: EvidenceNodeKind.VALIDATION_EVIDENCE,
+            data: { certificateFingerprint: certificate.fingerprint }, parents: [shardNodeId]
+          });
+        }
+      } catch (error) {
+        // Certificate issuance must never block the real accept/submit flow it is observing;
+        // surface the failure on the journal instead of silently swallowing it.
+        this.runtime.journal.append('patch.shard.certificate.failed', { taskKey: task.key, shardKey: patch.shardKey, error: error.message }, now);
+      }
+
       const next = this.patchFabric.submit(patch.sessionId, bundle, { expectedGeneration: bundle.generation, now });
       submitted.push({ taskKey, sessionId: patch.sessionId, shardKey: patch.shardKey, state: next.state });
       this.hotSymbolLock.release(task.key);
@@ -362,6 +476,19 @@ export class MicroShardCoordinator {
           evidenceBundle
         });
         this.runtime.journal.append('patch.parent.accepted', { parentTaskKey: parent.key, sessionId: patch.sessionId, integrationTaskKey: task.key, acceptedSha }, now);
+        try {
+          const candidateShaId = `candidate-sha:${acceptedSha}`;
+          const evidenceParents = (session?.expectedShardKeys ?? []).map((key) => `evidence:${key}`).filter((id) => this.evidenceGraph.nodes.has(id));
+          if (!this.evidenceGraph.nodes.has(candidateShaId) && evidenceParents.length) {
+            this.evidenceGraph.addNode({ id: candidateShaId, kind: EvidenceNodeKind.CANDIDATE_SHA, data: { acceptedSha, compositionDigest: patch.compositionDigest }, parents: evidenceParents });
+          }
+          const mergeId = `merge:${task.key}`;
+          if (!this.evidenceGraph.nodes.has(mergeId) && this.evidenceGraph.nodes.has(candidateShaId)) {
+            this.evidenceGraph.addNode({ id: mergeId, kind: EvidenceNodeKind.MERGE, data: { integrationTaskKey: task.key, parentTaskKey: parent.key }, parents: [candidateShaId] });
+          }
+        } catch (error) {
+          this.runtime.journal.append('patch.evidence.graph.failed', { parentTaskKey: parent.key, integrationTaskKey: task.key, error: error.message }, now);
+        }
         acceptedParents.push({ task: acceptedParent, evidenceBundle });
       } else if (['TERMINATE', 'ESCALATE'].includes(row.action)) {
         const session = this.patchFabric.get(patch.sessionId);

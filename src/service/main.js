@@ -51,8 +51,10 @@ const persistMs = Number(process.env.MAXXED_CONTROL_PERSIST_MS ?? 1000);
 const fabricUrl = process.env.MAXXED_FABRIC_URL ?? 'http://127.0.0.1:7788';
 const fabricAdminToken = process.env.MAXXED_FABRIC_ADMIN_TOKEN ?? '';
 const githubToken = process.env.MAXXED_GITHUB_TOKEN ?? '';
-const workerProvider = createFabricWorkerProvider({ baseUrl: fabricUrl, adminToken: fabricAdminToken });
-const fabricExecutionClient = fabricAdminToken ? new FabricExecutionClient({ baseUrl: fabricUrl, adminToken: fabricAdminToken }) : null;
+const fleetCacheTtlMs = Number(process.env.MAXXED_FLEET_CACHE_TTL_MS ?? 2000);
+const toolResultCache = new ToolResultCache({ maxEntries: Number(process.env.MAXXED_TOOL_CACHE_MAX ?? 20000), defaultTtlMs: Number(process.env.MAXXED_TOOL_CACHE_TTL_MS ?? 60000) });
+const workerProvider = createFabricWorkerProvider({ baseUrl: fabricUrl, adminToken: fabricAdminToken, toolResultCache, cacheTtlMs: fleetCacheTtlMs });
+const fabricExecutionClient = fabricAdminToken ? new FabricExecutionClient({ baseUrl: fabricUrl, adminToken: fabricAdminToken, toolResultCache, fleetCacheTtlMs }) : null;
 const workerPerformance = new WorkerPerformanceLedger();
 const runtime = new ControlPlaneRuntime({
   workerProvider,
@@ -95,7 +97,6 @@ const microShards = new MicroShardCoordinator({ runtime, patchFabric, shardPlann
 const leverageEngine = new LeverageEngine({ cas: solutionCas, graph: semanticGraph, transforms, repairs: repairMemory });
 const leverage = new LeverageRuntimeAdapter({ runtime, engine: leverageEngine, cas: solutionCas, harvester: trajectoryHarvester, repairs: repairMemory });
 const derivedState = new DerivedStateManager({ solutionCas, artifactCache, semanticGraph, trajectoryHarvester, repairMemory });
-const toolResultCache = new ToolResultCache({ maxEntries: Number(process.env.MAXXED_TOOL_CACHE_MAX ?? 20000), defaultTtlMs: Number(process.env.MAXXED_TOOL_CACHE_TTL_MS ?? 60000) });
 const executionCheckpoints = new ExecutionCheckpointStore({ maxEntries: Number(process.env.MAXXED_CHECKPOINT_MAX ?? 5000) });
 const leverageComponents = {
   leverage, solutionCas, artifactCache, artifactStore, semanticGraph, transforms, trajectoryHarvester, repairMemory,

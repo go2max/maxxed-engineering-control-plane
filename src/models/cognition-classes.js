@@ -77,3 +77,15 @@ export function defaultTierForCognitionClass(cognitionClass) {
   const rung = ESCALATION_LADDER.find((entry) => entry.cognitionClasses.includes(cognitionClass));
   return rung?.tier ?? EscalationTier.STRONG_MODEL;
 }
+
+// Live-dispatch inference (issue #72): given the shape of a real coding/repair task, decide
+// which cognition class it needs so ModelRouter.route() can apply tiered escalation and
+// cost-justification gating instead of every task defaulting to the same cheap tier.
+// Deliberately conservative: only riskClass and repeated-repair-failure evidence move a task
+// off the cheapest routine-coding class, since silence is never justification for frontier.
+export function inferCognitionClassForCodingTask({ riskClass = 'normal', repairAttempt = 0 } = {}) {
+  const attempts = Number(repairAttempt ?? 0);
+  if (riskClass === 'critical' || attempts >= 4) return CognitionClass.FRONTIER_REASONING;
+  if (riskClass === 'high' || attempts >= 2) return CognitionClass.SPECIALIST_REASONING;
+  return CognitionClass.ROUTINE_CODING;
+}
