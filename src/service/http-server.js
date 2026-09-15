@@ -176,11 +176,40 @@ export function createControlPlaneServer({ runtime, adminToken, codingLoop = nul
       }
       if (req.method === 'POST' && url.pathname === '/leverage/tests/select') {
         if (!leverageComponents?.impactTestSelector) return send(res, 503, { error: 'impact test selector is not configured' });
-        return send(res, 200, leverageComponents.impactTestSelector.select(await readJson(req)));
+        const body = await readJson(req);
+        const selection = leverageComponents.impactTestSelector.select(body);
+        // Even when affected-only selection is confident, periodically force a full-suite
+        // "challenge" run so impact-graph blind spots get caught before they compound. This is
+        // the same test-selection decision point real verifiers already consult, so the
+        // override is live for every real verification pass, not a separate code path.
+        if (leverageComponents.challengeSuiteScheduler && selection.mode === 'targeted') {
+          const scopeKey = body.scopeKey ?? body.repository ?? 'default';
+          const decision = leverageComponents.challengeSuiteScheduler.shouldChallenge({ scopeKey, selectionMode: selection.mode });
+          if (decision.challenge) {
+            return send(res, 200, {
+              ...selection,
+              mode: 'full',
+              tests: [...new Set(body.fullSuiteTests ?? [])].sort(),
+              targetedTests: selection.tests,
+              challenge: true,
+              challengeReason: decision.reason,
+              scopeKey
+            });
+          }
+        }
+        return send(res, 200, selection);
       }
       if (req.method === 'POST' && url.pathname === '/leverage/tests/record') {
         if (!leverageComponents?.testReliability) return send(res, 503, { error: 'test reliability ledger is not configured' });
         return send(res, 200, leverageComponents.testReliability.record(await readJson(req)));
+      }
+      if (req.method === 'POST' && url.pathname === '/leverage/tests/challenge/record') {
+        if (!leverageComponents?.challengeSuiteScheduler) return send(res, 503, { error: 'challenge suite scheduler is not configured' });
+        return send(res, 200, leverageComponents.challengeSuiteScheduler.record(await readJson(req)));
+      }
+      if (req.method === 'GET' && url.pathname === '/leverage/tests/challenge/blind-spots') {
+        if (!leverageComponents?.challengeSuiteScheduler) return send(res, 503, { error: 'challenge suite scheduler is not configured' });
+        return send(res, 200, { blindSpots: leverageComponents.challengeSuiteScheduler.blindSpots(url.searchParams.get('scopeKey') ?? 'default') });
       }
       if (req.method === 'POST' && url.pathname === '/leverage/training/revoke') {
         if (!leverageComponents?.trajectoryHarvester) return send(res, 503, { error: 'trajectory harvester is not configured' });

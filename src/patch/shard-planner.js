@@ -1,4 +1,5 @@
 import { digest } from '../leverage/solution-cas.js';
+import { AdaptiveShardSizer } from './adaptive-shard-sizing.js';
 
 function clamp(value, min, max) { return Math.max(min, Math.min(max, Number(value))); }
 
@@ -8,13 +9,34 @@ function overlaps(a, b) {
 }
 
 export class MicroShardPlanner {
-  constructor({ minLines = 40, targetLines = 250, maxLines = 600, fixedShardOverheadMs = 1500, compositionOverheadMs = 1200 } = {}) {
+  constructor({ minLines = 40, targetLines = 250, maxLines = 600, fixedShardOverheadMs = 1500, compositionOverheadMs = 1200, adaptiveSizer = new AdaptiveShardSizer({ minLines, baselineTargetLines: targetLines, maxLines }) } = {}) {
     this.minLines = minLines; this.targetLines = targetLines; this.maxLines = maxLines; this.fixedShardOverheadMs = fixedShardOverheadMs; this.compositionOverheadMs = compositionOverheadMs;
+    this.adaptiveSizer = adaptiveSizer;
   }
 
-  plan({ parentTaskKey, baseSha, units = [], availableSlots = 1, verifierSlots = 1, composerSlots = 1, estimatedMonolithicMs = null, maxShards = 64, riskClass = 'normal' } = {}) {
+  /**
+   * Feed a completed shard's outcome back into the adaptive sizer so future plan() calls for
+   * this (executor, task-class) pairing reflect what actually happened in production.
+   */
+  recordShardOutcome({ executorId, taskClass, shardLines, outcome, verifierCostMs = null, now = Date.now() } = {}) {
+    if (!this.adaptiveSizer || !executorId) return null;
+    return this.adaptiveSizer.recordOutcome({ executorId, taskClass, shardLines, outcome, verifierCostMs, now });
+  }
+
+  plan({ parentTaskKey, baseSha, units = [], availableSlots = 1, verifierSlots = 1, composerSlots = 1, estimatedMonolithicMs = null, maxShards = 64, riskClass = 'normal', executorId = null, taskClass = null, sizingFeatures = {} } = {}) {
     if (!parentTaskKey) throw new Error('parentTaskKey is required');
     if (!/^[0-9a-f]{40}$/i.test(String(baseSha ?? ''))) throw new Error('micro-sharding requires exact baseSha');
+
+    // When an executor/task-class pairing is supplied, ask the adaptive sizer what shard-size
+    // envelope this pairing has actually earned instead of always using the fixed defaults.
+    let recommendation = null;
+    let minLines = this.minLines; let targetLines = this.targetLines; let maxLines = this.maxLines;
+    if (this.adaptiveSizer && executorId) {
+      recommendation = this.adaptiveSizer.recommend({ executorId, taskClass, ...sizingFeatures });
+      minLines = recommendation.minLines;
+      targetLines = recommendation.targetLines;
+      maxLines = recommendation.maxLines;
+    }
     const normalized = units.map((unit, index) => ({
       id: String(unit.id ?? `unit-${index + 1}`),
       files: [...new Set(unit.files ?? [])].sort(),
@@ -41,8 +63,8 @@ export class MicroShardPlanner {
       }
       let candidate = groups
         .map((group, index) => ({ index, lines: group.reduce((sum, row) => sum + row.estimatedLines, 0), conflict: group.some((row) => overlaps(row, unit)) }))
-        .filter((row) => !row.conflict && row.lines + unit.estimatedLines <= this.maxLines)
-        .sort((a, b) => Math.abs((a.lines + unit.estimatedLines) - this.targetLines) - Math.abs((b.lines + unit.estimatedLines) - this.targetLines))[0];
+        .filter((row) => !row.conflict && row.lines + unit.estimatedLines <= maxLines)
+        .sort((a, b) => Math.abs((a.lines + unit.estimatedLines) - targetLines) - Math.abs((b.lines + unit.estimatedLines) - targetLines))[0];
       if (!candidate && groups.length < downstream) { groups.push([unit]); continue; }
       if (!candidate) candidate = groups.map((group, index) => ({ index, lines: group.reduce((sum, row) => sum + row.estimatedLines, 0) })).sort((a, b) => a.lines - b.lines)[0];
       groups[candidate.index].push(unit);
@@ -59,9 +81,9 @@ export class MicroShardPlanner {
     // heuristic (summed unit estimatedMs), which is unreliable for trivially small work. When the
     // caller supplies a measured estimatedMonolithicMs, the savings projection is authoritative and
     // shouldn't be overridden by a line-count proxy.
-    const belowMinimumWork = !hasMeasuredMonolithicMs && normalized.reduce((sum, unit) => sum + unit.estimatedLines, 0) < this.minLines * 2;
+    const belowMinimumWork = !hasMeasuredMonolithicMs && normalized.reduce((sum, unit) => sum + unit.estimatedLines, 0) < minLines * 2;
     if (shards.length <= 1 || projectedSavingsMs <= 0 || belowMinimumWork) {
-      return { mode: 'single', reason: 'coordination-cost-exceeds-savings', monolithicMs, projectedMs, projectedSavingsMs, shards: [this.#shard(parentTaskKey, baseSha, normalized, 1)] };
+      return { mode: 'single', reason: 'coordination-cost-exceeds-savings', monolithicMs, projectedMs, projectedSavingsMs, sizing: recommendation, shards: [this.#shard(parentTaskKey, baseSha, normalized, 1)] };
     }
     return {
       mode: 'micro-sharded',
@@ -71,8 +93,18 @@ export class MicroShardPlanner {
       projectedSavingsMs,
       projectedSpeedup: monolithicMs / projectedMs,
       downstreamCapacity: downstream,
+      sizing: recommendation,
       shards
     };
+  }
+
+  snapshot() {
+    return { version: 1, adaptiveSizer: this.adaptiveSizer ? this.adaptiveSizer.snapshot() : null };
+  }
+
+  restore(snapshot) {
+    if (snapshot && snapshot.version !== 1) throw new Error('unsupported shard-planner snapshot');
+    if (this.adaptiveSizer && snapshot?.adaptiveSizer) this.adaptiveSizer.restore(snapshot.adaptiveSizer);
   }
 
   #shard(parentTaskKey, baseSha, units, number) {
