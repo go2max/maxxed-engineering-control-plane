@@ -11,45 +11,84 @@ async function readJsonl(path) {
   });
 }
 
-const train = await readJsonl(`training/${manifest.splits.train}`);
-const evalRows = await readJsonl(`training/${manifest.splits.eval}`);
 const errors = [];
 const required = ['id', 'task_class', 'source_category', 'instruction', 'input', 'output', 'provenance', 'tags'];
+const canonicalDomains = new Set(manifest.domains || []);
 
-function validateRow(row, split, index) {
-  for (const key of required) if (!(key in row)) errors.push(`${split}[${index}] missing ${key}`);
-  if (!row.id || typeof row.id !== 'string') errors.push(`${split}[${index}] invalid id`);
-  if (!Array.isArray(row.tags)) errors.push(`${split}[${index}] tags must be an array`);
-  if (!row.provenance || typeof row.provenance !== 'object') errors.push(`${split}[${index}] provenance must be an object`);
+// `datasets` is the current multi-dataset structure; fall back to the legacy single `splits`
+// entry if a manifest hasn't been migrated to it yet.
+const datasets = manifest.datasets && manifest.datasets.length
+  ? manifest.datasets
+  : [{ dataset_id: manifest.dataset_id, domain: null, train: manifest.splits.train, eval: manifest.splits.eval }];
+
+function validateRow(row, datasetId, split, index) {
+  const label = `${datasetId}/${split}[${index}]`;
+  for (const key of required) if (!(key in row)) errors.push(`${label} missing ${key}`);
+  if (!row.id || typeof row.id !== 'string') errors.push(`${label} invalid id`);
+  if (!Array.isArray(row.tags)) errors.push(`${label} tags must be an array`);
+  if (!row.provenance || typeof row.provenance !== 'object') errors.push(`${label} provenance must be an object`);
+  if (row.domain && !canonicalDomains.has(row.domain)) {
+    errors.push(`${label} unknown domain "${row.domain}" (must be one of: ${[...canonicalDomains].join(', ')})`);
+  }
   const serialized = JSON.stringify(row).toLowerCase();
   for (const marker of ['authorization: bearer ', 'api_key=', 'password=', 'private key-----begin']) {
-    if (serialized.includes(marker)) errors.push(`${split}[${index}] possible secret/private material marker: ${marker}`);
+    if (serialized.includes(marker)) errors.push(`${label} possible secret/private material marker: ${marker}`);
   }
 }
 
-train.forEach((row, index) => validateRow(row, 'train', index));
-evalRows.forEach((row, index) => validateRow(row, 'eval', index));
+const allIds = [];
+let totalTrain = 0;
+let totalEval = 0;
+const allCategories = new Set();
 
-const allIds = [...train, ...evalRows].map((row) => row.id);
-const duplicateIds = allIds.filter((id, i) => allIds.indexOf(id) !== i);
-if (duplicateIds.length) errors.push(`duplicate ids: ${[...new Set(duplicateIds)].join(', ')}`);
+for (const dataset of datasets) {
+  const train = await readJsonl(`training/${dataset.train}`);
+  const evalRows = await readJsonl(`training/${dataset.eval}`);
 
-const trainIds = new Set(train.map((row) => row.id));
-for (const row of evalRows) if (trainIds.has(row.id)) errors.push(`eval id appears in train: ${row.id}`);
+  train.forEach((row, index) => validateRow(row, dataset.dataset_id, 'train', index));
+  evalRows.forEach((row, index) => validateRow(row, dataset.dataset_id, 'eval', index));
 
-const trainInputs = new Set(train.map((row) => JSON.stringify({ instruction: row.instruction, input: row.input })));
-for (const row of evalRows) {
-  const fingerprint = JSON.stringify({ instruction: row.instruction, input: row.input });
-  if (trainInputs.has(fingerprint)) errors.push(`eval instruction/input duplicates train: ${row.id}`);
+  // Per-dataset domain purity: a dataset declares one domain, so no record in it may claim a
+  // different domain (this is the "must stay separated, not contaminated into one corpus" rule).
+  if (dataset.domain) {
+    for (const row of [...train, ...evalRows]) {
+      if (row.domain && row.domain !== dataset.domain) {
+        errors.push(
+          `${dataset.dataset_id}: record ${row.id} declares domain "${row.domain}" but dataset is domain "${dataset.domain}"`
+        );
+      }
+    }
+  }
+
+  const trainIds = new Set(train.map((row) => row.id));
+  for (const row of evalRows) if (trainIds.has(row.id)) errors.push(`${dataset.dataset_id}: eval id appears in train: ${row.id}`);
+
+  const trainInputs = new Set(train.map((row) => JSON.stringify({ instruction: row.instruction, input: row.input })));
+  for (const row of evalRows) {
+    const fingerprint = JSON.stringify({ instruction: row.instruction, input: row.input });
+    if (trainInputs.has(fingerprint)) errors.push(`${dataset.dataset_id}: eval instruction/input duplicates train: ${row.id}`);
+  }
+
+  allIds.push(...train.map((r) => r.id), ...evalRows.map((r) => r.id));
+  for (const row of [...train, ...evalRows]) if (row.source_category) allCategories.add(row.source_category);
+  totalTrain += train.length;
+  totalEval += evalRows.length;
 }
 
-const categories = new Set([...train, ...evalRows].map((row) => row.source_category));
-const expected = new Set(['compute-fabric','control-plane-core','portfolio-scheduler','verifier-repair','local-model-router','admin-integration','saas-web-factory']);
-for (const category of expected) if (!categories.has(category)) errors.push(`missing source category: ${category}`);
+const duplicateIds = allIds.filter((id, i) => allIds.indexOf(id) !== i);
+if (duplicateIds.length) errors.push(`duplicate ids across datasets: ${[...new Set(duplicateIds)].join(', ')}`);
+
+const expectedSourceCategories = new Set(['compute-fabric','control-plane-core','portfolio-scheduler','verifier-repair','local-model-router','admin-integration','saas-web-factory']);
+for (const category of expectedSourceCategories) {
+  if (!allCategories.has(category)) errors.push(`missing source category: ${category}`);
+}
 
 if (errors.length) {
   console.error('Training data validation failed:\n' + errors.map((e) => `- ${e}`).join('\n'));
   process.exit(1);
 }
 
-console.log(`Training data valid: ${train.length} train + ${evalRows.length} eval records; ${categories.size} categories; no ID/input contamination detected.`);
+console.log(
+  `Training data valid: ${totalTrain} train + ${totalEval} eval records across ${datasets.length} dataset(s); ` +
+    `${allCategories.size} source categories; no ID/input contamination detected.`
+);
