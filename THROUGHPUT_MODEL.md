@@ -1,46 +1,130 @@
 # Throughput and Leverage Model
 
-## Primary metric
+## Methodology
+
+Current methodology: **v2.0 (2026-09-15)**.
+
+The historical **~86x** figure is preserved as a v1 comparison point. It is not a fixed calibration target. v2 reports must be recomputed from accepted semantic output rather than raw PR count times one flat hours-per-PR constant.
+
+## Primary metrics
+
+### Engineering capacity multiplier
+
+`engineering_capacity_multiplier = accepted_human_equivalent_hours / standard_engineer_day_hours`
+
+For daily reporting, `standard_engineer_day_hours = 8` unless otherwise stated. This answers: **how many conventional engineer-days of accepted output were produced in the interval?**
+
+### Owner-attention leverage
 
 `engineering_leverage = accepted_human_equivalent_hours / owner_active_intervention_hours`
 
-This remains the sustained owner-attention metric for the mixed portfolio. It is not wall-clock speed and is not measured by commits, agents, tokens or lane count.
+This is the sustained owner-attention metric for the mixed portfolio. It is not wall-clock speed and is not measured by commits, PRs, agents, tokens, lanes or API calls. Until owner-intervention telemetry is complete, capacity multiplier and owner-attention leverage must be reported separately.
 
-**Current measured operating baseline (2026-09-15): ~86x average effective engineering throughput.**
-
-## Secondary effective-leverage metric
-
-For standardized product-family operations, also measure:
+### Effective factory leverage
 
 `effective_factory_leverage = accepted_human_equivalent_hours / novel_reasoning_owner_equivalent_hours`
 
-This captures cases where one accepted novel solution is safely reused, transformed or fanned out across many products. It must be reported separately from sustained portfolio leverage.
+Use this for standardized product-family operations where one accepted novel solution is safely reused, transformed or fanned out across many products. Report it separately from sustained portfolio leverage.
 
-## Open-ended leverage rule
+## Accepted semantic capability is the accounting unit
 
-There is no terminal multiplier in this model. Named leverage values are **measurement milestones**, not architectural ceilings.
+The atomic output unit is an **accepted semantic capability**, not a pull request. One capability may arrive as one PR, several dependent PRs, one micro-shard composition, a deterministic transform fan-out or another bounded execution form.
 
-Milestone ladder:
+Count only artifacts satisfying the applicable acceptance contract. Reverted, duplicate, superseded, unverified, stale-cache, failed-deployment and rejected speculative work receives no output credit.
 
-`86x measured -> 300x -> 1K -> 3K -> 10K -> 30K -> 100K -> 300K -> 1M -> ...`
+Each accepted unit should record source SHA, final SHA, capability/task/product-family identity, acceptance evidence, semantic band, modifiers, human-equivalent estimate, confidence interval, methodology version, reuse/transform lineage, dependency/composition group, repair/rollback history, owner-intervention time when available, relevant policy/runtime versions, accepted timestamp and production outcome.
 
-New milestones may be inserted or methodology may evolve, but historical results must retain the methodology/version under which they were measured.
+## v2 semantic-equivalent-hours model
 
-The control plane should continue this loop indefinitely:
+For each accepted capability:
 
-`measure -> bottleneck -> candidate improvement -> simulation/shadow -> canary -> independent verification -> promotion -> outcome harvest -> next bottleneck`
+`H_capability = H_band × R × I × V × N × D`
 
-## Accepted-output rules
+Where:
 
-Count only artifacts satisfying the applicable acceptance contract. Reverted, duplicate, superseded, unverified, stale-cache and failed-deployment work receives no output credit.
+- `H_band` = conventional human baseline for semantic scope;
+- `R` = engineering/security/reliability risk modifier;
+- `I` = integration breadth modifier;
+- `V` = verification burden modifier;
+- `N` = novelty modifier;
+- `D` = dependency/correlation adjustment.
 
-Each accepted unit records source SHA, accepted/final SHA, task/product family, acceptance evidence, human-equivalent estimate, methodology version/confidence, reuse/transform lineage, repair/rollback history and accepted timestamp.
+### Starting semantic bands
 
-Each accepted unit should progressively also bind the policy, scheduler, decomposer, context-compiler, model-router, verifier-profile, transform-registry and environment/toolchain versions that materially influenced the result.
+| Band | Typical accepted capability | Baseline hours |
+|---|---|---:|
+| XS | tiny CI/docs/config correction or mechanical fix | 2 |
+| S | bounded bugfix/refactor or small tested behavior change | 5 |
+| M | normal tested feature/module or moderate repair | 10 |
+| L | cross-cutting feature, subsystem wiring or substantial reliability work | 20 |
+| XL | architectural/security boundary change or major subsystem slice | 36 |
+| XXL | multi-module subsystem capability with broad verification/integration burden | 56 |
+
+The band represents semantic engineering scope, not changed lines, commits or PR size.
+
+### Modifier guidance
+
+Modifiers stay intentionally restrained so the semantic band carries most of the estimate:
+
+- `R`: normally `1.00-1.35`; upper range for security, authorization, money movement, destructive state, release authority and similarly high-consequence work.
+- `I`: normally `1.00-1.25`; cross-runtime, cross-repository, persistence, protocol or multi-authority integration.
+- `V`: normally `1.00-1.20`; unusually heavy independent verification, migration proof, chaos testing, rollback proof or high-dimensional regression burden.
+- `N`: normally `1.00-1.20`; meaningful new design/reasoning rather than routine adaptation.
+- `D`: normally `0.65-1.00`; discount tightly dependent follow-ups so staged wiring and PR slicing do not multiply one capability's credit.
+
+Modifiers must be evidence-backed and persisted. They are not rewards for perceived importance.
+
+## Composition and dependency accounting
+
+When several accepted changes jointly implement one capability, score the capability first and reconcile child units against it.
+
+1. Tightly dependent PR chains do not receive full independent credit for the same semantic work.
+2. Wiring/follow-up PRs may receive incremental credit for real integration risk and verification, but not duplicate the primitive already credited.
+3. One large PR must not automatically earn more credit than the same capability split into smaller PRs.
+4. Deterministic fan-out is credited only for independently accepted derivative value that a conventional engineer would otherwise have produced.
+5. Bisection, repair and retry effort is recorded as rework/cost, not fresh output, unless it delivers a separate accepted capability.
+
+Recommended reconciliation check:
+
+`abs(sum(child_estimates) - capability_estimate) / capability_estimate <= 0.15`
+
+Outside that tolerance, regroup or reclassify.
+
+## Confidence and uncertainty
+
+Aggregates should include a confidence range, for example:
+
+`168x capacity [145x-192x, medium confidence]`
+
+Confidence reflects acceptance/proof coverage, source/final SHA lineage, observed-vs-modeled lifecycle coverage, semantic-band uncertainty, modifier uncertainty, missing owner-attention telemetry, unresolved composition grouping and production-outcome maturity.
+
+Modeled values must never be silently presented as observed values.
+
+## Baseline recalibration
+
+The historical ~86x baseline was produced under the previous methodology and remains a versioned historical reference only. Before comparing v2 performance against an earlier period, rerun at least the prior 2-4 weeks through v2 semantic-capability classification when data is available.
+
+Do not compare a v2 weighted numerator against a v1 flat-PR baseline and call the difference an uplift.
+
+Each reported aggregate should store interval, methodology version, accepted-capability count, semantic-equivalent hours, capacity multiplier, owner-attention leverage when measured, confidence interval, observed-vs-modeled coverage, composition adjustment, rejected/reverted/reworked effort and rollback/escape rate.
+
+## Post-landing improvements enabled by current control-plane capabilities
+
+The control plane now has enough instrumentation to reduce subjectivity progressively:
+
+- **Execution-evidence calibration:** shard lifecycle telemetry, engineering traces, accepted outcome records, evidence graphs and proof certificates should calibrate semantic bands against observed repair rate, verifier burden, conflict rate, integration difficulty and production outcome.
+- **Task-class learning:** learn band/modifier calibration by task class, executor/model, mutation surface, dependency depth, context entropy and verifier cost. Candidate scoring policies must still pass offline replay -> shadow -> benchmark -> canary -> independent promotion gate before production use.
+- **Composition-aware dedupe:** parent/child lineage and evidence-graph identity should collapse micro-shards and dependent PRs back to one accepted parent capability.
+- **Economic quality:** track `cost_per_accepted_capability`, `accepted_equivalent_hours_per_owner_hour`, `accepted_equivalent_hours_per_compute_dollar` and `accepted_equivalent_hours_per_model_dollar`.
+- **Counterfactual savings:** report reuse, deterministic transforms, proof reuse, checkpoint resume and targeted verification as causal work avoided, separately from newly authored output.
+- **Owner-attention telemetry:** record active steering/approval/debugging minutes against capabilities or intervals, excluding unattended wall time. This is the largest remaining denominator improvement.
+
+A higher multiplier accompanied by materially worse rollback, security, cost or verifier-escape rates is not an improvement.
 
 ## Compounding leverage accounting
 
 Track reasoning avoided, not only work produced:
+
 - exact solution-cache hit rate;
 - deterministic-transform hit rate;
 - retrieval-assisted vs novel-reasoning rate;
@@ -52,50 +136,33 @@ Track reasoning avoided, not only work produced:
 - average dependency-slice size vs repository size;
 - context-entropy score;
 - micro-shard coordination overhead;
-- patches accepted per novel solution;
 - repair-memory reuse rate;
 - failure-frontier reuse rate;
 - durable-checkpoint recovery savings;
 - training/eval improvement by task class;
 - abstraction-mining promotions;
-- complexity deleted per accepted capability.
+- complexity deleted per accepted capability;
+- duplicate-work suppression;
+- targeted-verification savings vs challenge-suite escapes;
+- owner approvals/exceptions per accepted capability.
 
 A cache/certificate/reuse hit counts only if immutable source identity, policy/environment compatibility and acceptance requirements remain valid.
 
-## Milestone checkpoints
+## Open-ended leverage rule
 
-### 86x measured baseline
-Current observed operating average. This is the comparison point for future control-plane measurements.
+There is no terminal multiplier. Named values are measurement milestones, not architectural ceilings.
 
-### 300x milestone
-Autonomous portfolio scheduling, bounded coding/repair, local compute fabric, independent verification and product-family reuse allow the owner to remain primarily exception-driven.
+`historical v1 ~86x -> v2 recalibrated baseline -> 300x -> 1K -> 3K -> 10K -> 30K -> 100K -> 300K -> 1M -> ...`
 
-### 1K milestone
-Semantic slicing, content-addressed solution/artifact caches, deterministic transforms, stronger work packets and impact-selected verification materially reduce rediscovery and repeated reasoning.
+Historical results retain the methodology/version under which they were measured.
 
-### 3K milestone
-Context/horizon compression, micro-sharding, repair memory, capability reuse and low-rework parallel execution are broadly effective across mixed work.
+The control plane continues:
 
-### 10K milestone
-Standardized maintenance/migration/product-family operations are dominated by deterministic transforms, exact/semantic reuse, validation-certificate reuse and shared baselines.
-
-### 30K milestone
-Capability graphs, product factories, learned routing, durable checkpoints and abstraction mining make one novel solution produce many independently accepted results.
-
-### 100K milestone
-Highly repetitive portfolio/family operations can safely turn one novel solution into hundreds or thousands of accepted derivatives with little additional reasoning. This is a major milestone, not a stopping point and not a promise for arbitrary novel engineering.
-
-### 300K milestone
-Requires additional measured improvements beyond the 100K milestone—for example higher capability fan-out, stronger proof/evidence reuse, better automatic abstraction discovery, lower verifier duplication, more deterministic execution and lower coordination entropy.
-
-### 1M+ milestones
-Not assumed or guaranteed. They remain valid research/measurement goals when independently accepted-output accounting demonstrates the required compounding leverage without weakening constraints.
-
-See `docs/OPEN_ENDED_LEVERAGE_ARCHITECTURE.md` for the latest 100-perspective adversarial review, GitHub sweep and no-ceiling architecture. See `docs/AI_AGENT_100K_ACCELERATION_AUDIT.md` for the earlier 1,600-perspective sector review and detailed engineering-hour phase model.
+`measure -> bottleneck -> candidate improvement -> simulation/shadow -> canary -> independent verification -> promotion -> outcome harvest -> next bottleneck`
 
 ## Additional no-ceiling KPIs
 
-- executor reliable-horizon by task class;
+- executor reliable horizon by task class;
 - task-shrink/decomposition success rate;
 - probabilistic stages per accepted capability;
 - proof/evidence graph completeness;
@@ -131,7 +198,7 @@ See `docs/OPEN_ENDED_LEVERAGE_ARCHITECTURE.md` for the latest 100-perspective ad
 - Duplicate fan-out is not multiplied unless each derivative artifact is independently accepted and represents real human-equivalent work.
 - Cache reuse against mutable or unproven source identity creates no leverage credit.
 - Validation bypass creates no credit.
-- Speculative candidates count only the accepted result; rejected candidates are compute cost.
-- Merely increasing agents, tokens, commits, tasks, API calls or logical concurrency creates no leverage credit.
+- Speculative candidates count only the accepted result; rejected candidates are compute/rework cost.
+- Increasing agents, tokens, commits, PRs, tasks, API calls or logical concurrency alone creates no leverage credit.
 - A lower-quality or less-safe result cannot be credited as leverage because it completed faster.
 - Historical leverage retains the methodology version used at the time.
