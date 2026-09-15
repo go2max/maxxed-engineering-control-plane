@@ -19,6 +19,9 @@ import { ArtifactCache } from '../leverage/artifact-cache.js';
 import { FileArtifactStore } from '../leverage/content-addressed-artifact-store.js';
 import { ProductFamilyPlanner } from '../leverage/product-family-planner.js';
 import { CANONICAL_PRODUCT_FAMILIES } from '../leverage/product-family-baselines.js';
+import { CapabilityGraph } from '../leverage/capability-graph.js';
+import { mineAbstractions } from '../leverage/abstraction-miner.js';
+import { readOutcomeLog } from '../training/outcome-store.js';
 import { BottleneckOptimizer } from '../leverage/bottleneck-optimizer.js';
 import { MaintenancePlanner } from '../leverage/maintenance-planner.js';
 import { defaultControlPlaneReplayProjector } from '../leverage/execution-replay.js';
@@ -78,6 +81,9 @@ const transforms = new TransformRegistry();
 const trajectoryHarvester = new TrajectoryHarvester({ maxRecords: Number(process.env.MAXXED_TRAJECTORY_MAX ?? 50000) });
 const repairMemory = new RepairMemory();
 const productFamilies = new ProductFamilyPlanner();
+const capabilityGraph = new CapabilityGraph({ graph: semanticGraph });
+const outcomeLogPath = process.env.MAXXED_OUTCOME_LOG_PATH ?? path.join(stateDir, 'outcomes.jsonl');
+const abstractionMiner = (options = {}) => mineAbstractions(readOutcomeLog(options.logPath ?? outcomeLogPath), options);
 const bottleneckOptimizer = new BottleneckOptimizer();
 const maintenancePlanner = new MaintenancePlanner();
 const replayProjector = defaultControlPlaneReplayProjector();
@@ -103,7 +109,7 @@ const derivedState = new DerivedStateManager({ solutionCas, artifactCache, seman
 const executionCheckpoints = new ExecutionCheckpointStore({ maxEntries: Number(process.env.MAXXED_CHECKPOINT_MAX ?? 5000) });
 const leverageComponents = {
   leverage, solutionCas, artifactCache, artifactStore, semanticGraph, transforms, trajectoryHarvester, repairMemory,
-  productFamilies, bottleneckOptimizer, maintenancePlanner, replayProjector, sourceIndexer, codeIndexes, contextCompiler,
+  productFamilies, capabilityGraph, abstractionMiner, bottleneckOptimizer, maintenancePlanner, replayProjector, sourceIndexer, codeIndexes, contextCompiler,
   speculativePlanner, impactTestSelector, testReliability, challengeSuiteScheduler, workerPerformance, shardPlanner, patchFabric, microShards, derivedState, leverageEngine,
   toolResultCache, executionCheckpoints, evidenceGraph, certificateCache
 };

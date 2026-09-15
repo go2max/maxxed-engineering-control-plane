@@ -259,6 +259,46 @@ export function createControlPlaneServer({ runtime, adminToken, codingLoop = nul
         if (!leverageComponents) return send(res, 503, { error: 'leverage fabric is not configured' });
         return send(res, 200, leverageComponents.productFamilies.plan(await readJson(req)));
       }
+      if (req.method === 'POST' && url.pathname === '/leverage/capabilities/register') {
+        if (!leverageComponents?.capabilityGraph) return send(res, 503, { error: 'capability graph is not configured' });
+        return send(res, 201, leverageComponents.capabilityGraph.registerCapability(await readJson(req)));
+      }
+      if (req.method === 'GET' && url.pathname === '/leverage/capabilities/find') {
+        if (!leverageComponents?.capabilityGraph) return send(res, 503, { error: 'capability graph is not configured' });
+        const key = url.searchParams.get('key') ?? undefined;
+        const tags = url.searchParams.getAll('tag');
+        return send(res, 200, { match: leverageComponents.capabilityGraph.findCanonicalCapability({ key, tags }) });
+      }
+      if (req.method === 'POST' && url.pathname === '/leverage/capabilities/implementations') {
+        if (!leverageComponents?.capabilityGraph) return send(res, 503, { error: 'capability graph is not configured' });
+        return send(res, 201, leverageComponents.capabilityGraph.registerImplementation(await readJson(req)));
+      }
+      if (req.method === 'POST' && url.pathname === '/leverage/capabilities/link-family') {
+        if (!leverageComponents?.capabilityGraph) return send(res, 503, { error: 'capability graph is not configured' });
+        return send(res, 201, leverageComponents.capabilityGraph.linkFamily(await readJson(req)));
+      }
+      if (req.method === 'POST' && url.pathname === '/leverage/capabilities/link-instance') {
+        if (!leverageComponents?.capabilityGraph) return send(res, 503, { error: 'capability graph is not configured' });
+        return send(res, 201, leverageComponents.capabilityGraph.linkInstance(await readJson(req)));
+      }
+      if (req.method === 'POST' && url.pathname === '/leverage/capabilities/link-test') {
+        if (!leverageComponents?.capabilityGraph) return send(res, 503, { error: 'capability graph is not configured' });
+        return send(res, 201, leverageComponents.capabilityGraph.linkTest(await readJson(req)));
+      }
+      if (req.method === 'POST' && url.pathname === '/leverage/capabilities/link-channel') {
+        if (!leverageComponents?.capabilityGraph) return send(res, 503, { error: 'capability graph is not configured' });
+        return send(res, 201, leverageComponents.capabilityGraph.linkChannel(await readJson(req)));
+      }
+      if (req.method === 'GET' && url.pathname.match(/^\/leverage\/capabilities\/[^/]+\/impact$/)) {
+        if (!leverageComponents?.capabilityGraph) return send(res, 503, { error: 'capability graph is not configured' });
+        const key = decodeURIComponent(url.pathname.split('/')[3]);
+        return send(res, 200, leverageComponents.capabilityGraph.impactOf(key));
+      }
+      if (req.method === 'POST' && url.pathname === '/leverage/abstraction-mining/run') {
+        if (!leverageComponents?.abstractionMiner) return send(res, 503, { error: 'abstraction miner is not configured' });
+        const body = await readJson(req);
+        return send(res, 200, leverageComponents.abstractionMiner(body));
+      }
       if (req.method === 'POST' && url.pathname === '/leverage/maintenance/plan') {
         if (!leverageComponents) return send(res, 503, { error: 'leverage fabric is not configured' });
         return send(res, 200, leverageComponents.maintenancePlanner.plan(await readJson(req)));
