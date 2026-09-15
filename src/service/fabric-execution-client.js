@@ -1,3 +1,5 @@
+import { fleetCacheKey } from './fabric-worker-provider.js';
+
 function normalize(url) { return String(url ?? 'http://127.0.0.1:7788').replace(/\/$/, ''); }
 
 async function parse(response) {
@@ -8,13 +10,25 @@ async function parse(response) {
 }
 
 export class FabricExecutionClient {
-  constructor({ baseUrl = 'http://127.0.0.1:7788', adminToken, fetchImpl = fetch, timeoutMs = 5_000 } = {}) {
+  // `toolResultCache` (issue #65) is optional and, when supplied, is shared with
+  // createFabricWorkerProvider via the same fleetCacheKey(baseUrl) so a fleet read triggered
+  // here and one triggered via the worker provider within the same TTL window are the same
+  // cache entry -- a real duplicate-read elimination across two independent call sites that
+  // both poll GET /fleet on the same compute fabric.
+  constructor({ baseUrl = 'http://127.0.0.1:7788', adminToken, fetchImpl = fetch, timeoutMs = 5_000, toolResultCache = null, fleetCacheTtlMs = 2_000 } = {}) {
     if (!adminToken) throw new Error('fabric admin token is required');
     this.baseUrl = normalize(baseUrl); this.adminToken = adminToken; this.fetch = fetchImpl; this.timeoutMs = timeoutMs;
+    this.toolResultCache = toolResultCache; this.fleetCacheTtlMs = fleetCacheTtlMs;
   }
 
   async enqueue(task) { return this.#request('/tasks', { method: 'POST', body: JSON.stringify(task) }); }
-  async fleet() { return this.#request('/fleet', { method: 'GET' }); }
+
+  async fleet() {
+    const loader = () => this.#request('/fleet', { method: 'GET' });
+    if (!this.toolResultCache) return loader();
+    const { value } = await this.toolResultCache.getOrLoad(fleetCacheKey(this.baseUrl), loader, { ttlMs: this.fleetCacheTtlMs, tags: ['fabric-fleet'] });
+    return value;
+  }
 
   async #request(path, init) {
     const controller = new AbortController();

@@ -10,10 +10,10 @@
 //   PR_BODY="..." node scripts/check-reuse-gate.mjs # read from env var
 //
 // Exits 0 and prints the parsed declaration on success; exits 1 with a diagnostic otherwise.
-// Intended for local use and CI (e.g. a PR-triggered workflow step that fetches the PR body via
-// the GitHub API and pipes it in). Not wired into ci.yml's push/branch build directly since that
-// workflow has no PR body to read on a `push` event -- see docs/REUSE_FIRST_CHECKLIST.md for how
-// to invoke this in a PR-triggered context.
+// Intended for local use and CI. Wired into .github/workflows/ci.yml as an
+// `if: github.event_name == 'pull_request'` step that reads `github.event.pull_request.body`
+// and pipes it in via stdin -- there is no PR body to validate on a plain `push` event, so the
+// step is skipped there. See docs/REUSE_FIRST_CHECKLIST.md for details.
 
 import { readFileSync } from 'node:fs';
 
