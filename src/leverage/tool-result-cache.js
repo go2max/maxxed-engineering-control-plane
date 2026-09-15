@@ -24,7 +24,7 @@ export class ToolResultCache {
     if (typeof loader !== 'function') throw new Error('loader function is required');
     const key = typeof input === 'string' ? input : toolCacheKey(input);
     const cached = this.entries.get(key);
-    if (cached && (!cached.expiresAt || cached.expiresAt > now) && (!scopeFingerprint || !cached.scopeFingerprint || cached.scopeFingerprint === scopeFingerprint)) {
+    if (cached && (!cached.expiresAt || cached.expiresAt > now) && cached.scopeFingerprint === (scopeFingerprint ?? null)) {
       cached.hits += 1;
       this.stats.hits += 1;
       return { key, value: structuredClone(cached.value), hit: true, coalesced: false };
@@ -85,8 +85,14 @@ export class ToolResultCache {
     return removed;
   }
 
-  // Verify recomputes the content digest for a stored entry and quarantines (evicts) it on
-  // mismatch instead of ever serving a corrupted/poisoned value (issue #65, section 12).
+  // Verify recomputes the content digest for a stored entry from the same in-memory `row.value`
+  // that produced `row.checksum`, and quarantines (evicts) it on mismatch. This only catches
+  // in-process corruption (e.g. a caller mutating a returned/stored value in place); it cannot
+  // detect a value that was poisoned before checksum and value were paired up together (a
+  // poisoner who controls both sets them consistently). Restore-time tamper/poisoning defense
+  // against an externally-supplied snapshot is handled separately by `restore()` below, which
+  // drops any entry whose checksum does not match its value instead of trusting it (issue #65,
+  // section 12; security review finding 6).
   verify(input) {
     const key = typeof input === 'string' ? input : toolCacheKey(input);
     const row = this.entries.get(key);
@@ -114,7 +120,17 @@ export class ToolResultCache {
     this.maxEntries = Math.max(1, Number(snapshot?.maxEntries ?? this.maxEntries));
     this.defaultTtlMs = Number(snapshot?.defaultTtlMs ?? this.defaultTtlMs);
     this.stats = { hits: 0, misses: 0, coalesced: 0, quarantined: 0, ...(snapshot?.stats ?? {}) };
-    this.entries = new Map((snapshot?.entries ?? []).map((row) => [row.key, structuredClone(row)]));
+    // Fail-closed on restore (security review finding 6): a persisted snapshot may come from
+    // outside this process (disk corruption, a poisoned file). Recompute each entry's checksum
+    // and drop any entry whose value doesn't match its stored checksum instead of trusting it
+    // wholesale, matching CertificateCache.restore()'s pattern in proof-certificate.js.
+    this.entries = new Map();
+    for (const row of snapshot?.entries ?? []) {
+      if (!row || typeof row.key !== 'string') continue;
+      const clone = structuredClone(row);
+      if (digest(clone.value) !== clone.checksum) { this.stats.quarantined += 1; continue; }
+      this.entries.set(clone.key, clone);
+    }
     this.inFlight = new Map();
   }
 }
