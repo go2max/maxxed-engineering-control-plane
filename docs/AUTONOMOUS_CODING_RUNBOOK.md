@@ -2,6 +2,10 @@
 
 This runbook activates the local-first coding loop at a guarded throughput target with automatic Patch Fabric micro-lanes when decomposition is profitable.
 
+> Driving a large batch of issues through parallel subagents (implement → wire live → verify
+> → merge)? See [`MULTI_AGENT_ORCHESTRATION_PLAYBOOK.md`](./MULTI_AGENT_ORCHESTRATION_PLAYBOOK.md)
+> for the process this repo now uses.
+
 ## Safety boundary
 
 The loop never writes directly to `main`.
