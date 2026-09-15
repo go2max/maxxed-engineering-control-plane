@@ -86,6 +86,7 @@ export class AutonomousCodingLoop {
       const patchReconciliation = this.microShards ? this.microShards.reconcile(reconciled, { now }) : { submitted: [], composed: [], acceptedParents: [], failedParents: [] };
       const harvested = [...this.#harvest(reconciled, now), ...this.#harvestPatchParents(patchReconciliation, now)];
       const promoted = this.promotion ? await this.promotion.sync(now) : [];
+      const policyTrainingActions = this.runtime.syncPolicyTraining ? this.runtime.syncPolicyTraining(now) : [];
       const workers = await this.runtime.workerProvider();
       this.runtime.reconcileModels(workers, now);
 
@@ -125,7 +126,7 @@ export class AutonomousCodingLoop {
           this.runtime.journal.append('fabric.task.submit-failed', { taskKey: task.key, error: error.message, kind: task.metadata?.execution?.kind ?? 'unknown' }, now);
         }
       }
-      this.lastTick = { at: now, reconciled, harvested, promoted, submitted, throughput, patch: { reconciliation: patchReconciliation, materialized: materializedShards } };
+      this.lastTick = { at: now, reconciled, harvested, promoted, submitted, throughput, policyTraining: policyTrainingActions, patch: { reconciliation: patchReconciliation, materialized: materializedShards } };
       return structuredClone(this.lastTick);
     } finally { this.running = false; }
   }
